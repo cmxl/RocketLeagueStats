@@ -66,6 +66,8 @@ These are intentionally cut. The architecture leaves doors open for most of them
 | D13 | Hub is **broadcast-only**; cold-load via HTTP `GET /api/state` | Initial state load via REST is simpler than a hub round-trip — caches/inspects in DevTools, doesn't depend on hub state. SignalR is a pure broadcast pipe. |
 | D14 | Landing page is a **chooser**, not an auto-router. Live tile shows live state if active, otherwise an inactive tile. History tile always available. | User wants to decide whether to view live or recaps; no automatic routing — same rationale as D1. |
 | D15 | Goal overlay is **scoped to `LiveViewComponent`**; match-end toast is **app-wide**. | Goal overlays shouldn't fire on settings/history pages (intrusive). Match-end toast IS cross-route because it offers navigation to the just-ended recap. |
+| D16 | **NgRx SignalStore for state management** (not hand-rolled service classes); **zoneless change detection** (`provideZonelessChangeDetection()`); **signal-based component APIs** (`input()`/`output()`/`model()`/`viewChild()`); **`httpResource()`** for filter-driven REST fetches; **`linkedSignal()`** for draft state. All components default to **`ChangeDetectionStrategy.OnPush`**. | These are the Angular 20+ recommended patterns for new applications. SignalStore composition (`withState` / `withComputed` / `withMethods` / `withHooks` / `withEntities`) is a strict upgrade over hand-rolled signal services for non-trivial state, and `rxMethod` is the right tool for SignalR side-effects (cancellation, composition with operators). Zoneless removes Zone.js entirely — smaller bundle, more deterministic CD with signals. |
+| D17 | **Pin to "latest compatible stable" rather than hardcoded versions** (Angular = current major LTS at implementation time; .NET 10 per repo `global.json`). The `RocketLeagueStats.WebApp/package.json` and `Directory.Packages.props` carry concrete versions; the spec carries the *strategy*. | Specs outlive any specific version. By the time someone reads this in 2027 the concrete versions are stale; the *strategy* (latest stable, verified compatible) is durable. |
 
 ## 5. Architecture
 
@@ -394,7 +396,7 @@ src/RocketLeagueStats.WebApp/src/
 │   ├── tokens.css          (CSS custom properties — palette, typography scale)
 │   └── animations.css      (keyframes — goal-flash, pulse, slide-in)
 └── app/
-    ├── app.config.ts       (provideRouter, provideHttpClient, provideAnimationsAsync)
+    ├── app.config.ts       (provideRouter, provideHttpClient, provideAnimationsAsync, provideZonelessChangeDetection)
     ├── app.routes.ts
     ├── app.component.ts    (shell: nav + connection banner + match-end toast outlet + router-outlet)
     │
@@ -434,15 +436,176 @@ src/RocketLeagueStats.WebApp/src/
 
 All components are **standalone** (no NgModules). Angular 20+ default.
 
-### 7.3 State stores — signal-first
+### 7.3 State stores — NgRx SignalStore
 
-`LiveMatchStore` is the central live-state store, `providedIn: 'root'`. Holds writable signals for everything the live view consumes; bootstraps the hub connection and the initial `/api/state` fetch in its constructor.
+All stores are built with **NgRx SignalStore** (`@ngrx/signals`) using the composable `withState` / `withComputed` / `withMethods` / `withHooks` / `withEntities` features. SignalStore replaces hand-rolled service classes with structured, immutable, DevTools-friendly state management built natively on Angular signals.
 
-`HistoryStore` and `RecapStore` use Angular's `resource()` API for declarative async loading — request/response cycles tied to a request signal, with built-in `value` / `isLoading` / `error` / `status` signals. No Observables for fetches; Observables only for the SignalR stream.
+#### `LiveMatchStore` (root scope)
 
-`SettingsStore` loads settings once on construction, exposes a writable signal, persists via `PUT /api/settings` on save.
+```typescript
+import { signalStore, withState, withComputed, withMethods, withHooks, patchState } from '@ngrx/signals';
+import { rxMethod } from '@ngrx/signals/rxjs-interop';
+import { from, pipe, switchMap, tap } from 'rxjs';
 
-`ToastStore` holds the latest match-end toast state (a `MatchSummaryDto | null` signal that auto-clears after 30s).
+interface LiveMatchState {
+  phase: MatchPhase;
+  currentMatch: MatchHeader | null;
+  clockSeconds: number | null;
+  blueScore: number;
+  orangeScore: number;
+  playerStats: PlayerStatsRow[];
+  recentGoals: Goal[];                 // last 8, newest first
+  recentStatfeeds: Statfeed[];         // last 8, newest first
+  lastGoalAt: Date | null;
+  gameConnected: boolean;
+  pendingGoalOverlay: Goal | null;     // independent of recentGoals (separate dismiss timer)
+}
+
+const initialState: LiveMatchState = { /* … */ };
+
+export const LiveMatchStore = signalStore(
+  { providedIn: 'root' },
+  withState(initialState),
+  withComputed(({ phase, currentMatch }) => ({
+    hasLiveMatch: computed(() => phase() === 'live' && !!currentMatch()),
+  })),
+  withMethods((store, hub = inject(StatsHubClient), api = inject(ApiClient)) => ({
+    handleGoal(g: Goal) {
+      patchState(store, s => ({
+        recentGoals: [g, ...s.recentGoals].slice(0, 8),
+        blueScore: g.blueScoreAfter,
+        orangeScore: g.orangeScoreAfter,
+        lastGoalAt: g.timestamp,
+        pendingGoalOverlay: g,
+      }));
+    },
+    refreshFromServer: rxMethod<void>(
+      pipe(
+        switchMap(() => from(api.getState())),
+        tap(state => patchState(store, applyLiveState(state))),
+      ),
+    ),
+    // … handleStatfeed, handleClockTick, handlePhaseChanged, etc.
+  })),
+  withHooks({
+    onInit(store, hub = inject(StatsHubClient)) {
+      hub.connect();
+      hub.onGoal(g => store.handleGoal(g));
+      hub.onStatfeed(s => store.handleStatfeed(s));
+      hub.onClockTick(sec => patchState(store, { clockSeconds: sec }));
+      hub.onPlayerStatsTick(rows => patchState(store, { playerStats: rows }));
+      hub.onPhaseChanged(p => patchState(store, { phase: p }));
+      hub.onConnectionState(c => patchState(store, { gameConnected: c.connectedToGame }));
+      hub.onMatchInitialized(h => store.handleMatchInitialized(h));
+      hub.onMatchEnded(s => store.handleMatchEnded(s));
+      hub.onReconnected(() => store.refreshFromServer());
+      store.refreshFromServer();   // initial cold load
+    },
+  }),
+);
+```
+
+`rxMethod` is the right primitive for SignalR side-effects: it accepts an RxJS pipe, automatically subscribes when called, and unsubscribes when the store is destroyed. `switchMap` provides cancellation if a refresh is triggered while another is in flight.
+
+#### `HistoryStore` — uses `httpResource()`
+
+```typescript
+export const HistoryStore = signalStore(
+  { providedIn: 'root' },
+  withState({
+    filter: { types: ['Online'], range: 'all' as DateRange, sort: 'recent' as Sort },
+  }),
+  withMethods((store) => ({
+    setFilter(patch: Partial<HistoryFilter>) {
+      patchState(store, s => ({ filter: { ...s.filter, ...patch } }));
+    },
+  })),
+);
+
+// Resource at component or feature level (or in a separate signal):
+const historyResource = httpResource<MatchSummary[]>(() => ({
+  url: '/api/matches',
+  params: {
+    types: store.filter().types.join(','),
+    sort: store.filter().sort,
+    range: store.filter().range,
+  },
+}));
+// historyResource.value(), historyResource.isLoading(), historyResource.error()
+```
+
+#### `RecapStore` — uses `httpResource()` keyed off route param
+
+```typescript
+export const RecapStore = signalStore(
+  { providedIn: 'root' },
+  withState({ matchId: null as string | null }),
+  withMethods((store) => ({
+    load(matchId: string) { patchState(store, { matchId }); },
+    clear() { patchState(store, { matchId: null }); },
+  })),
+);
+
+const recapResource = httpResource<MatchRecap | null>(() =>
+  store.matchId() ? { url: `/api/matches/${store.matchId()}` } : undefined
+);
+```
+
+#### `SettingsStore`
+
+```typescript
+interface SettingsState {
+  loaded: SettingsDto | null;          // canonical, last-saved
+  draft: SettingsDto | null;           // user's edits, unsaved
+  saveStatus: 'idle' | 'saving' | 'error';
+}
+
+export const SettingsStore = signalStore(
+  { providedIn: 'root' },
+  withState<SettingsState>({ loaded: null, draft: null, saveStatus: 'idle' }),
+  withComputed(({ loaded, draft }) => ({
+    hasUnsavedChanges: computed(() => draft() !== null && !deepEqual(draft(), loaded())),
+  })),
+  withMethods((store, api = inject(ApiClient)) => ({
+    setDraft(patch: Partial<SettingsDto>) { /* … */ },
+    save: rxMethod<void>(
+      pipe(
+        tap(() => patchState(store, { saveStatus: 'saving' })),
+        switchMap(() => from(api.updateSettings(store.draft()!))),
+        tap(saved => patchState(store, { loaded: saved, draft: null, saveStatus: 'idle' })),
+      ),
+    ),
+  })),
+  withHooks({
+    onInit(store, api = inject(ApiClient)) {
+      from(api.getSettings()).subscribe(s => patchState(store, { loaded: s }));
+    },
+  }),
+);
+```
+
+Uses `linkedSignal()` could replace the manual `draft` state, but the explicit two-field model (`loaded` / `draft`) maps more cleanly onto the "save changes" UX and works better with the SignalStore composition style.
+
+#### `ToastStore`
+
+Tiny — single signal for the latest match-end toast, auto-clear timer. Could be a plain `signal()` rather than a SignalStore, but using SignalStore consistently across all stores aids DevTools inspection.
+
+```typescript
+export const ToastStore = signalStore(
+  { providedIn: 'root' },
+  withState({ matchEndedToast: null as MatchSummary | null }),
+  withMethods((store) => ({
+    showMatchEndedToast(summary: MatchSummary) {
+      patchState(store, { matchEndedToast: summary });
+      setTimeout(() => patchState(store, { matchEndedToast: null }), 30_000);
+    },
+    dismiss() { patchState(store, { matchEndedToast: null }); },
+  })),
+);
+```
+
+`★ Why SignalStore everywhere`
+SignalStore is the modern Angular 20+ recommendation for state management: it composes cleanly, uses signals natively (no marshalling between Observables and signals), supports DevTools, integrates `rxMethod` for proper side-effect lifetimes, and `withEntities` is available if/when we ever need a normalized collection (currently we don't — match index lives server-side). For consistency, all stores use SignalStore even when a plain signal would suffice; the cost is trivial and the consistency aids reasoning about state across the app.
 
 ### 7.4 App shell
 
@@ -450,6 +613,7 @@ All components are **standalone** (no NgModules). Angular 20+ default.
 @Component({
   selector: 'rls-root',
   imports: [RouterOutlet, NavBarComponent, ConnectionBannerComponent, MatchEndToastComponent],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <rls-nav-bar />
     <rls-connection-banner />
@@ -459,7 +623,12 @@ All components are **standalone** (no NgModules). Angular 20+ default.
     <rls-match-end-toast />
   `,
 })
-export class AppComponent { }
+export class AppComponent {
+  // LiveMatchStore is providedIn: 'root' — its onInit hook runs on first injection
+  // and bootstraps the hub connection + initial state load. Inject it here so the
+  // store is alive for the lifetime of the app, regardless of which route is shown.
+  private readonly liveMatch = inject(LiveMatchStore);
+}
 ```
 
 `<rls-goal-overlay />` is mounted **inside `LiveViewComponent`** only (not the app shell) — overlays should not fire on history/settings pages.
@@ -472,26 +641,57 @@ Reconnect policy: `withAutomaticReconnect([0, 2_000, 10_000, 30_000])` — retri
 
 ### 7.6 Library choices
 
-| Concern | Library | Notes |
-|---|---|---|
-| Angular | **Angular 20 LTS** (or latest stable at implementation time) | Standalone components, signals, new control flow (`@if`, `@for`), `resource()` API |
-| Real-time client | **`@microsoft/signalr`** | Official SignalR JS client; pairs with `Hub<IStatsHubClient>` server-side |
-| Styling | **Tailwind CSS v4** (CSS-based config) + custom CSS for clip-path panels | Utility-first; tokens (palette, typography) live in `styles/tokens.css`, not in the Tailwind theme |
-| Charts | **Apache ECharts** via `ngx-echarts` | Best-in-class for time-series + bar charts; theme-able to RLCS palette; loaded lazily on `/recap/:matchId` only |
-| Animations | **`@angular/animations`** + native View Transitions API | Used for goal lower-third, scene transitions; no GSAP dependency |
-| Unit testing | **Vitest** + **Angular Testing Library** | Vitest is faster than Karma, fully supported by Angular 20+ |
-| E2E testing | **Playwright** | Same tool used for Blazor; supports CI caching via `dotnet-skills:playwright-ci-caching` |
+**Versioning strategy** (per D17): pin to *latest compatible stable* at implementation time. The concrete versions live in `package.json` / `Directory.Packages.props`; this table carries the *strategy* and the role of each library. Implementer should run `npm install <pkg>@latest` for npm packages and confirm peer-dep compatibility before locking versions.
 
-| .NET concern | Library | Notes |
+| Frontend concern | Library | Notes |
 |---|---|---|
-| Mediator | **`martinothamar/Mediator`** | Per CLAUDE.md (not MediatR) |
-| Logging | **Serilog** | Existing in v1 console; reused |
-| Health checks | **`Microsoft.Extensions.Diagnostics.HealthChecks`** | Standard ASP.NET Core middleware |
-| OpenAPI (optional but recommended) | **`Microsoft.AspNetCore.OpenApi`** | Generates Swagger at build time; powers `.http` samples |
-| Testing | **xUnit + NSubstitute** | Per CLAUDE.md |
-| Integration testing | **`Microsoft.AspNetCore.Mvc.Testing`** (`WebApplicationFactory`) | In-process API spin-up |
+| Framework | **Angular** (current major LTS) | At time of writing, Angular 20+. Standalone components, signals, `@if`/`@for`/`@switch` control flow, signal-based component APIs, zoneless change detection. |
+| State management | **`@ngrx/signals`** (NgRx SignalStore) | All stores use SignalStore: `withState` / `withComputed` / `withMethods` / `withHooks`. `rxMethod` from `@ngrx/signals/rxjs-interop` for SignalR side-effects with proper cancellation. DevTools via `@ngrx/signals/redux-devtools` if desired. |
+| Real-time client | **`@microsoft/signalr`** | Official SignalR JS client; pairs with `Hub<IStatsHubClient>` server-side. |
+| HTTP fetches | **`httpResource()`** (built-in, Angular 20+) for filter/key-driven fetches; **`HttpClient`** for one-shot calls (e.g., `PUT /api/settings` from a SignalStore method) | `httpResource` ties request shape to signal inputs — the textbook fit for the history filter and recap loader. |
+| Styling | **Tailwind CSS v4** (CSS-based config) + custom CSS for clip-path panels | Utility-first; tokens (palette, typography) live in `styles/tokens.css`, *not* in the Tailwind theme — they need to be referenced from custom CSS too. |
+| Charts | **Apache ECharts** via `ngx-echarts` (current stable) | Best-in-class for time-series + bar charts; theme-able to the RLCS palette; loaded behind a `@defer` block on the recap route only. |
+| Animations | **`@angular/animations`** + native View Transitions API | Used for goal lower-third, scene transitions, list reorders. No GSAP dependency. |
+| Unit testing | **Vitest** + **`@testing-library/angular`** | Vitest is the modern Angular default; faster than Karma. |
+| E2E testing | **Playwright** | Same tool used by Blazor; supports CI caching via `dotnet-skills:playwright-ci-caching`. |
+| Lint / format | **ESLint** (`@angular-eslint`) + **Prettier** | Standard Angular tooling. |
 
-### 7.7 Dev vs prod
+| Backend concern | Library | Notes |
+|---|---|---|
+| Framework | **.NET 10** + ASP.NET Core | Per repo `global.json`. Minimal API + Mediator pattern. |
+| Real-time | **`Microsoft.AspNetCore.SignalR`** | Strongly-typed `Hub<IStatsHubClient>`. |
+| Mediator | **`martinothamar/Mediator`** | Per CLAUDE.md (not MediatR). |
+| Logging | **Serilog** | Existing in v1 console; reused. |
+| Health checks | **`Microsoft.Extensions.Diagnostics.HealthChecks`** | Standard ASP.NET Core middleware at `/health`. |
+| OpenAPI | **`Microsoft.AspNetCore.OpenApi`** | Generates Swagger at build time; powers `.http` samples. |
+| Testing | **xUnit + NSubstitute** | Per CLAUDE.md. |
+| Integration testing | **`Microsoft.AspNetCore.Mvc.Testing`** (`WebApplicationFactory`) | In-process API spin-up; real DI graph; only the TCP client is faked. |
+
+### 7.7 Angular 20+ patterns checklist
+
+These are the Angular best practices the implementation MUST adopt across the board. Listed here as a checklist so reviews can verify compliance against a single reference.
+
+- **Standalone components only** — no `NgModule` declarations
+- **Signal-based component APIs**:
+  - `input()` / `input.required()` for inputs (not `@Input()`)
+  - `output()` for outputs (not `@Output()` + `EventEmitter`)
+  - `model()` for two-way bindings
+  - `viewChild()` / `viewChildren()` / `contentChild()` / `contentChildren()` (not `@ViewChild`)
+- **`ChangeDetectionStrategy.OnPush`** on every component (default expectation; deviations require justification)
+- **Zoneless change detection** — `provideZonelessChangeDetection()` in `app.config.ts`. No Zone.js dependency
+- **NgRx SignalStore** for all non-trivial state (per D16, §7.3)
+- **`httpResource()`** for filter-driven REST fetches (history, recap)
+- **`linkedSignal()`** where derived state needs to be writable (e.g., reset-on-source-change patterns)
+- **`computed()`** for pure derivations from other signals; never use `effect()` to write to a signal (footgun)
+- **`afterNextRender()` / `afterRenderEffect()`** for DOM-dependent setup (e.g., chart instances) — not constructor or `ngOnInit`
+- **Control flow blocks** — `@if`, `@for` (with required `track`), `@switch` — never `*ngIf`, `*ngFor`, `*ngSwitch`
+- **`@defer` blocks** for non-critical components — recap charts, settings page, anything not on the critical first-paint path
+- **`inject()` over constructor injection** — modern services use `inject()` at the field level for cleaner inheritance and DI in non-class contexts
+- **`takeUntilDestroyed()`** when subscribing to Observables outside `rxMethod` — provides automatic cleanup tied to the injector lifetime
+- **No `BehaviorSubject` / `Subject`** for state — signals everywhere; Subjects only for genuine event streams that aren't state (rare in this app)
+- **No `async` pipe** in templates for state — read signals directly via `()`. The `async` pipe still applies to genuine Observable streams, but state should be signals.
+
+### 7.8 Dev vs prod
 
 - **Dev**: `ng serve --proxy-config proxy.conf.json` runs Angular on `:4200`, proxies `/api/*` and `/hub/*` to `http://localhost:5000`. The .NET backend runs separately (`dotnet run` from `RocketLeagueStats.Console`). CORS configured to allow `http://localhost:4200` only when `ASPNETCORE_ENVIRONMENT=Development`.
 - **Prod**: `Build-WebApp.ps1` builds the Angular bundle → copies to `src/RocketLeagueStats.Web/wwwroot/`. The .NET project serves the SPA via `app.UseStaticFiles() + app.MapFallbackToFile("index.html")`. Single EXE, single port (5000), same-origin everything.
