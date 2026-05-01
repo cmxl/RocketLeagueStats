@@ -1,0 +1,1 @@
+{"Event":"GoalScored","MatchGuid":"abc-123","Data":{"MatchGuid":"abc-123","GoalSpeed":1834.5,"GoalTime":127.5,"ImpactLocation":{"X":0,"Y":-2944,"Z":320},"Scorer":{"Name":"Karbon","Shortcut":1,"TeamNum":0},"Assister":{"Name":"Daniel","Shortcut":3,"TeamNum":0},"BallLastTouch":{"Player":{"Name":"Karbon","Shortcut":1,"TeamNum":0},"Speed":1500}}}

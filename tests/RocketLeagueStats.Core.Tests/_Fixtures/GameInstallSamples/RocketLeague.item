@@ -1,0 +1,20 @@
+{
+  "FormatVersion": 0,
+  "AppName": "Sugar",
+  "InstallLocation": "C:\\Program Files\\Epic Games\\rocketleague",
+  "DisplayName": "Rocket League",
+  "MainGameAppName": "Sugar",
+  "ManifestLocation": "C:\\ProgramData\\Epic\\EpicGamesLauncher\\Data\\Manifests",
+  "bIsIncompleteInstall": false,
+  "bRequiresAuth": true,
+  "CatalogItemId": "9773aa1aa54f4f7b80e44bef04986cea",
+  "CatalogNamespace": "9773aa1aa54f4f7b80e44bef04986cea",
+  "AppCategories": ["public", "games"],
+  "ChunkDbs": [],
+  "CompatibleApps": [],
+  "InstallTags": [],
+  "InstallComponents": [],
+  "HostInstallationGuid": "00000000-0000-0000-0000-000000000000",
+  "PrereqIds": [],
+  "PrereqSHA1Hash": ""
+}

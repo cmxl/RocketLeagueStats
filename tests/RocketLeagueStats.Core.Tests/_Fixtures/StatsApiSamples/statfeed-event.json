@@ -1,0 +1,1 @@
+{"Event":"StatfeedEvent","MatchGuid":"abc-123","Data":{"MatchGuid":"abc-123","EventName":"Demolish","Type":"Demolition","MainTarget":{"Name":"PlayerA","Shortcut":1,"TeamNum":0},"SecondaryTarget":{"Name":"PlayerB","Shortcut":2,"TeamNum":1}}}

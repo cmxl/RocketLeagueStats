@@ -1,0 +1,48 @@
+# .NET build outputs
+bin/
+obj/
+out/
+artifacts/
+*.user
+*.suo
+*.cache
+*.dll
+*.exe
+*.pdb
+*.lock.json
+project.lock.json
+project.fragment.lock.json
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.swp
+*~
+
+# Test results / coverage
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+*.trx
+
+# OS metadata
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Project-specific runtime artifacts
+**/logs/
+*.bak
+*.bak.*
+tests.log
+
+# EF Core artifacts (kept out until schema work begins)
+**/Migrations/Designer.cs
+
+# Local Claude Code overrides (shared settings.json would be committed)
+.claude/settings.local.json
+
+# Git worktrees (isolated workspaces for parallel branches)
+.worktrees/

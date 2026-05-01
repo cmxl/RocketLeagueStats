@@ -1,0 +1,1 @@
+{"Event":"BallHit","MatchGuid":"abc-123","Data":{"MatchGuid":"abc-123","Players":[{"Name":"Karbon","Shortcut":1,"TeamNum":0}],"Ball":{"PreHitSpeed":0,"PostHitSpeed":1450.2,"Location":{"X":-512,"Y":100,"Z":200}}}}
