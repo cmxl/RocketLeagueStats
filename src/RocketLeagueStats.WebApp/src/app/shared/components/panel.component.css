@@ -1,0 +1,40 @@
+.panel {
+  --panel-cut: 14px;
+  --panel-bg: var(--bg-elevated);
+  --panel-border: var(--accent-cyan);
+  --panel-border-thickness: 2px;
+
+  position: relative;
+  isolation: isolate;
+  padding: 1.25rem 1.5rem;
+}
+
+.panel::before {
+  content: ''; position: absolute; inset: 0;
+  background: var(--panel-border);
+  clip-path: polygon(
+    var(--panel-cut) 0, 100% 0,
+    100% calc(100% - var(--panel-cut)), calc(100% - var(--panel-cut)) 100%,
+    0 100%, 0 var(--panel-cut)
+  );
+  z-index: -2;
+}
+
+.panel::after {
+  content: ''; position: absolute; inset: var(--panel-border-thickness);
+  background: var(--panel-bg);
+  clip-path: polygon(
+    var(--panel-cut) 0, 100% 0,
+    100% calc(100% - var(--panel-cut)), calc(100% - var(--panel-cut)) 100%,
+    0 100%, 0 var(--panel-cut)
+  );
+  z-index: -1;
+}
+
+.panel--blue   { --panel-border: var(--team-blue); }
+.panel--orange { --panel-border: var(--team-orange); }
+.panel--mvp    { --panel-border: var(--accent-mvp); --panel-border-thickness: 3px; }
+
+.panel--glow.panel--blue   { filter: drop-shadow(var(--shadow-glow-blue)); }
+.panel--glow.panel--orange { filter: drop-shadow(var(--shadow-glow-orange)); }
+.panel--glow.panel--mvp    { filter: drop-shadow(var(--shadow-glow-mvp)); }

@@ -2,7 +2,7 @@
 
 A live, in-terminal feed of every event your Rocket League match emits — goals, ball hits, demolitions, saves, the clock, the whole match lifecycle — captured straight from the official **Rocket League Stats API** (released April 2026).
 
-> **Status:** v1 — command-line tool only. A Discord broadcaster and a web dashboard are planned but not built yet.
+> **Status:** v1.5 — console tool + web dashboard. A Discord broadcaster is planned but not built yet.
 
 ```text
 14:02:11 Match created
@@ -165,38 +165,146 @@ Run with `--trace` and capture a few seconds of output. Open an issue with the t
 
 ```
 src/
-  RocketLeagueStats.Core/        domain, parsing, event bus, install detection, ini writer
-  RocketLeagueStats.Console/     generic-host app with hosted services
+  RocketLeagueStats.Core/        domain, parsing, event bus, install detection, ini writer, shared hosted services
+  RocketLeagueStats.Console/     v1 terminal-only host (Microsoft.NET.Sdk, plain generic host)
+  RocketLeagueStats.WebApi/      web dashboard host: SignalR hub, Minimal API, projectors, wwwroot
+  RocketLeagueStats.WebApp/      Angular 21 SPA (builds into WebApi/wwwroot via Build-WebApp.ps1)
 tests/
-  RocketLeagueStats.Core.Tests/  xUnit + NSubstitute, includes a real captured-session JSONL replay
+  RocketLeagueStats.Core.Tests/  xUnit + NSubstitute; includes captured-session JSONL replay
+  RocketLeagueStats.WebApi.Tests/ integration tests for API endpoints and hub
+  RocketLeagueStats.WebApp.E2E/  Playwright smoke specs (require running EXE on :5000)
 tools/
+  Build-WebApp.ps1               Build Angular -> deploy to WebApi/wwwroot
+  Build-Release.ps1              Console release pipeline: tests -> publish -> zip
+  Build-Release-WebApi.ps1       Web Dashboard release pipeline: tests -> Angular -> publish -> zip
   docker-compose.yml             SQL Server 2022, reserved for future aggregation
-docs/                            specs & plans (currently empty in v1)
+docs/
+  architecture.md                Mermaid diagrams and event-flow tables
+  api-contract.md                REST + SignalR hub reference with example payloads
 ```
 
 ### Build and test
 
 ```powershell
 dotnet build                       # warnings-as-errors
-dotnet test                        # all 26 tests should pass
+dotnet test                        # 64 Core + 57 WebApi.Tests = 121 tests
+cd src/RocketLeagueStats.WebApp
+npm test                           # 9 Vitest specs (pipes, app smoke)
 ```
 
 ### Manual smoke test
 
 ```powershell
+# Console (legacy terminal feed)
 dotnet run --project src/RocketLeagueStats.Console
-# Start Rocket League, enter a match — events appear in the terminal.
+
+# WebApi (dashboard host) — open http://localhost:5000/ in a browser
+dotnet run --project src/RocketLeagueStats.WebApi -- --no-config-helper --no-log
 ```
 
 ### Tech notes
 
-- Generic Host with four hosted services: ini bootstrap, TCP listener, console renderer, JSONL logger
-- Event bus is an internal `Channel<StatsEvent>` — single producer (the listener), multiple consumers
-- Rendering is `Spectre.Console` for colour markup
-- Logging is Serilog (console + rolling daily file)
-- JSON is `System.Text.Json` with a source-generated context — no reflection at runtime
+- **Console** uses `Host.CreateApplicationBuilder` (generic host); **WebApi** uses `WebApplication.CreateBuilder` (web host). Both register the same shared hosted services from Core: ini bootstrap, TCP listener, JSONL logger.
+- Console adds `ConsoleRendererService` (Spectre terminal markup); WebApi adds `LiveMatchProjector` (translates bus events into SignalR broadcasts + history index updates).
+- Event bus is `RocketLeagueStats.Core.Bus.StatsEventBus` — a `Channel<StatsEvent>` with multi-subscriber fan-out. Single producer (the listener), N consumers.
+- WebApi's REST + SignalR JSON uses `System.Text.Json` with `JsonNamingPolicy.CamelCase` for both property names and enum values. TypeScript client types match exactly.
+- Logging is Serilog (console + rolling daily file).
 
-Roadmap items kept out of v1 deliberately: Discord broadcasting and an Angular web frontend each have their own specs.
+Roadmap items kept out of v1 deliberately: Discord broadcasting has its own spec.
+
+---
+
+## Two runnable projects
+
+After v1.5, the project ships two independent executables:
+
+- **`RocketLeagueStats.exe`** (Console) — the original v1 terminal feed. Connects to RL's TCP API, prints colour-coded events to terminal, writes JSONL logs. Run as `dotnet run --project src/RocketLeagueStats.Console`.
+- **`RocketLeagueStats.WebApi.exe`** (Web Dashboard) — opens the same TCP connection, exposes a SignalR hub at `/hub/stats`, REST API at `/api/*`, and serves the Angular SPA from `wwwroot/`. Run as `dotnet run --project src/RocketLeagueStats.WebApi`. Open `http://localhost:5000/` in a browser.
+
+Only one can run at a time per game session — Rocket League's Stats API allows a single TCP listener.
+
+---
+
+## Web Dashboard (v1.5)
+
+Open `http://localhost:5000/` in any browser on the same machine — or `http://<gaming-pc>:5000/` from any device on your home LAN — while the EXE is running. The dashboard provides a live match scoreboard, a history of completed matches, and a per-match recap with charts.
+
+### Configuration
+
+The WebApi project supports the same CLI flags as the Console plus a port override:
+
+| CLI flag | Config key | Default | Description |
+|---|---|---|---|
+| `--port <n>` | `StatsApi:Port` | `49123` | RL Stats API TCP port the listener binds to |
+| `--web-port <n>` | `Web:Port` | `5000` | HTTP port the dashboard listens on |
+| `--no-config-helper` | `GameSetup:AutoConfigureIni=false` | enabled | Skip auto-writing RL's `DefaultStatsAPI.ini` |
+| `--no-log` | `EventLog:Enabled=false` | enabled | Don't write JSONL event logs |
+| `--trace` | `StatsApi:TraceMode=true` | off | Diagnostic raw-socket dump |
+| `--dump-snapshot` | `Diagnostics:DumpSnapshots=true` | off | Write the first `MatchStateSnapshot` of each match to `logs/snapshots/snapshot-<timestamp>-match<N>.json` for wire-format inspection |
+
+The dashboard binds to `0.0.0.0` by default — anything on your LAN can reach it at `http://<gaming-pc>:5000/`. If you want localhost-only, set `Web:Url` to `http://127.0.0.1:5000` in `appsettings.json`.
+
+> The legacy console-only mode is `RocketLeagueStats.Console` itself — there's no `--no-web` flag because the two hosts are independent projects. Run whichever fits your need.
+
+### Features (v1)
+
+- **Live match view** with RLCS-style scoreboard, action feed (goals, saves, demos, epic saves), per-player tallies, time-since-last-goal counter, and cinematic goal lower-thirds
+- **Match history** with filtering (Online / Casual / Tournament / Private; toggle to include training/free play)
+- **Recap view** for any completed match: final score hero, MVP card, goal timeline, time-between-goals chart, per-player stats, speed leaderboard, cumulative-score game-flow chart
+- **Settings page** to configure your in-game name (powers own-card highlight in live view)
+
+### Settings persistence
+
+User settings persist at `%APPDATA%/RocketLeagueStats/settings.json`. Edit by hand or via the dashboard's `/settings` page.
+
+### Tech stack
+
+- Backend: .NET 10 + ASP.NET Core, SignalR, `martinothamar/Mediator`, Serilog
+- Frontend: Angular 21 (zoneless, signals), NgRx SignalStore, Tailwind v4, Apache ECharts, `@microsoft/signalr`
+- Tests: xUnit + NSubstitute (.NET), Vitest (Angular), Playwright (E2E)
+
+### Building the dashboard for release
+
+The dashboard is a single Windows executable that bundles the .NET host *and* the Angular SPA (the bundle ships inside the EXE's `wwwroot`). Two build modes:
+
+```powershell
+# Small EXE (~6 MB zip) — requires .NET 10 runtime installed on the target
+pwsh ./tools/Build-Release-WebApi.ps1 -Version 1.5.0
+
+# Self-contained EXE (~48 MB compressed zip) — runs on any Windows machine, no prereqs
+pwsh ./tools/Build-Release-WebApi.ps1 -Version 1.5.0 -SelfContained
+```
+
+What the script does:
+1. Runs the full test suite (skip with `-SkipTests` for faster iteration)
+2. Builds the Angular bundle via `Build-WebApp.ps1` (npm ci + ng build production)
+3. Copies the bundle into `src/RocketLeagueStats.WebApi/wwwroot/`
+4. `dotnet publish` the WebApi as a single-file `win-x64` executable
+5. Zips the publish folder, generates a SHA256 checksum, prints the upload command
+
+Artifacts land in `artifacts/RocketLeagueStats-WebApi-v<version>-win-x64[-self-contained].zip`. Unzip and run `RocketLeagueStats.WebApi.exe` — open `http://localhost:5000/` in a browser.
+
+To build just the Angular bundle (for local production-like testing) without packaging:
+
+```powershell
+pwsh ./tools/Build-WebApp.ps1
+dotnet run --project src/RocketLeagueStats.WebApi -- --no-config-helper
+# Open http://localhost:5000/
+```
+
+For active Angular development with hot reload, use the dev proxy (two terminals):
+
+```powershell
+# Terminal 1 — API on :5000
+dotnet run --project src/RocketLeagueStats.WebApi -- --no-config-helper --no-log
+
+# Terminal 2 — ng serve on :4200, proxies /api/* and /hub/* to :5000
+cd src/RocketLeagueStats.WebApp
+npm start
+# Open http://localhost:4200/
+```
+
+The legacy console release is unchanged — `pwsh ./tools/Build-Release.ps1 -Version 1.0.x` produces a small console-only EXE.
 
 ---
 

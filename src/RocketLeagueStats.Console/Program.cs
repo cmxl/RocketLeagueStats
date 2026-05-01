@@ -13,7 +13,7 @@ builder.Configuration.AddCommandLine(args, switchMappings: new Dictionary<string
     ["--port"] = "StatsApi:Port",
 });
 
-// Bare-presence boolean flags — manual overrides
+// Bare-presence boolean flags
 if (args.Contains("--raw", StringComparer.Ordinal))
 {
     builder.Configuration["Console:RawMode"] = "true";
@@ -34,20 +34,19 @@ if (args.Contains("--trace", StringComparer.Ordinal))
     builder.Configuration["StatsApi:TraceMode"] = "true";
 }
 
-// Serilog — wire to host
-builder.Services.AddSerilog((sp, lc) =>
-    lc.ReadFrom.Configuration(builder.Configuration)
-      .Enrich.FromLogContext());
+if (args.Contains("--dump-snapshot", StringComparer.Ordinal))
+{
+    builder.Configuration["Diagnostics:DumpSnapshots"] = "true";
+}
 
-// Fail-fast on hosted service exceptions
+builder.Services.AddSerilog((sp, lc) =>
+    lc.ReadFrom.Configuration(builder.Configuration).Enrich.FromLogContext());
+
 builder.Services.Configure<HostOptions>(o =>
     o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost);
 
 builder.Services.AddRocketLeagueStatsCore(builder.Configuration);
-
-builder.Services.AddHostedService<IniBootstrapHostedService>();
-builder.Services.AddHostedService<StatsApiListenerService>();
+builder.Services.AddRocketLeagueStatsHostingDefaults();
 builder.Services.AddHostedService<ConsoleRendererService>();
-builder.Services.AddHostedService<JsonlEventLoggerService>();
 
 await builder.Build().RunAsync();

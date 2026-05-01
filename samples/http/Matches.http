@@ -1,0 +1,21 @@
+@host = http://localhost:5000
+
+### Get history (default: online only, most recent first)
+GET {{host}}/api/matches
+Accept: application/json
+
+### Include training matches
+GET {{host}}/api/matches?includeTraining=true
+Accept: application/json
+
+### Sort by highest-scoring
+GET {{host}}/api/matches?sort=highestScoring
+Accept: application/json
+
+### Get a specific recap (200)
+GET {{host}}/api/matches/00000000-0000-0000-0000-000000000001
+Accept: application/json
+
+### Get a non-existent recap (404)
+GET {{host}}/api/matches/no-such-match
+Accept: application/json

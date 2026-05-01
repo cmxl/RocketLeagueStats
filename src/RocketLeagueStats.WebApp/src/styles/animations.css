@@ -1,0 +1,17 @@
+/* Reactive transitions */
+@keyframes rls-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rls-slide-down { from { transform: translateY(-32px); } to { transform: translateY(0); } }
+
+/* Cinematic */
+@keyframes rls-goal-in {
+  from { opacity: 0; transform: translateY(40px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)    scale(1.00); }
+}
+@keyframes rls-goal-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(20px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 100ms !important; transition-duration: 100ms !important; }
+}

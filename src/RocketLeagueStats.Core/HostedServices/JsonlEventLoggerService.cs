@@ -1,4 +1,4 @@
-namespace RocketLeagueStats.Console.HostedServices;
+namespace RocketLeagueStats.Core.HostedServices;
 
 using System.Globalization;
 using System.IO.Compression;

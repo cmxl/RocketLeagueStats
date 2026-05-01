@@ -1,0 +1,5 @@
+@host = http://localhost:5000
+
+### Get current live state (cold load)
+GET {{host}}/api/state
+Accept: application/json

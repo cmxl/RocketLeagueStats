@@ -1,4 +1,4 @@
-namespace RocketLeagueStats.Console.HostedServices;
+namespace RocketLeagueStats.Core.HostedServices;
 
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;

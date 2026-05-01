@@ -1,0 +1,41 @@
+:root {
+  /* Surfaces */
+  --bg-base:        #07090F;
+  --bg-elevated:    #13182A;
+  --bg-overlay:     #0A0E1Acc;
+
+  /* Team identities */
+  --team-blue:      #00B7FF;
+  --team-blue-deep: #003D55;
+  --team-blue-glow: rgba(0, 183, 255, 0.45);
+  --team-orange:      #FF8500;
+  --team-orange-deep: #5A2E00;
+  --team-orange-glow: rgba(255, 133, 0, 0.45);
+
+  /* Accents */
+  --accent-mvp:      #FFC107;
+  --accent-mvp-glow: rgba(255, 193, 7, 0.55);
+  --accent-success:  #00E676;
+  --accent-danger:   #FF3D5A;
+  --accent-cyan:     #00E5FF;
+
+  /* Text */
+  --text-primary:   #F0F4FF;
+  --text-secondary: #7A8AA8;
+  --text-muted:     #4A5A78;
+
+  /* Effects */
+  --shadow-panel:       0 4px 24px rgba(0, 0, 0, 0.6);
+  --shadow-glow-blue:   0 0 32px var(--team-blue-glow);
+  --shadow-glow-orange: 0 0 32px var(--team-orange-glow);
+  --shadow-glow-mvp:    0 0 32px var(--accent-mvp-glow);
+
+  /* Type scale */
+  --font-display: 'Bebas Neue', system-ui, sans-serif;
+  --font-header:  'Rajdhani', system-ui, sans-serif;
+  --font-body:    'Inter', system-ui, sans-serif;
+
+  --text-xs: 0.75rem;  --text-sm: 0.875rem; --text-base: 1rem;
+  --text-lg: 1.25rem;  --text-xl: 1.5rem;   --text-2xl: 2rem;
+  --text-3xl: 3rem;    --text-display-md: 4.5rem;  --text-display-lg: 7rem;
+}

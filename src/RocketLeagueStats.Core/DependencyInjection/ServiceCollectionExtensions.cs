@@ -8,6 +8,7 @@ using RocketLeagueStats.Core.Configuration;
 using RocketLeagueStats.Core.Connection;
 using RocketLeagueStats.Core.Events;
 using RocketLeagueStats.Core.GameSetup;
+using RocketLeagueStats.Core.HostedServices;
 using RocketLeagueStats.Core.Persistence;
 
 public static class ServiceCollectionExtensions
@@ -17,6 +18,7 @@ public static class ServiceCollectionExtensions
         services.Configure<StatsApiOptions>(configuration.GetSection(StatsApiOptions.SectionName));
         services.Configure<EventLogOptions>(configuration.GetSection(EventLogOptions.SectionName));
         services.Configure<GameSetupOptions>(configuration.GetSection(GameSetupOptions.SectionName));
+        services.Configure<DiagnosticsOptions>(configuration.GetSection(DiagnosticsOptions.SectionName));
 
         services.AddSingleton<StatsEventParser>();
         services.AddSingleton<StatsEventBus>();
@@ -41,6 +43,15 @@ public static class ServiceCollectionExtensions
             }
         });
 
+        return services;
+    }
+
+    public static IServiceCollection AddRocketLeagueStatsHostingDefaults(this IServiceCollection services)
+    {
+        services.AddHostedService<IniBootstrapHostedService>();
+        services.AddHostedService<StatsApiListenerService>();
+        services.AddHostedService<JsonlEventLoggerService>();
+        services.AddHostedService<SnapshotDumperService>();
         return services;
     }
 }

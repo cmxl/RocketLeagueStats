@@ -95,7 +95,7 @@ Run `dotnet restore` after the next task adds `<PackageReference>` items.
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
-    <PackageReference Include="Microsoft.Extensions.Http" />
+    <!-- Microsoft.Extensions.Http is transitive via Microsoft.NET.Sdk.Web; explicit reference fires NU1510 under TreatWarningsAsErrors. -->
     <PackageReference Include="Mediator.SourceGenerator">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -124,7 +124,15 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("RocketLeagueStats.Web.Tests")]
 ```
 
-- [ ] **Step 4:** Create the empty `wwwroot` directory and add a placeholder `.gitkeep`:
+- [ ] **Step 4:** Create a stub `Program.cs` at `src/RocketLeagueStats.Web/Program.cs` (Microsoft.NET.Sdk.Web requires an entry point — three lines is enough; Console's Program.cs is the real entry when published):
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+app.Run();
+```
+
+- [ ] **Step 5:** Create the empty `wwwroot` directory and add a placeholder `.gitkeep`:
 
 ```
 src/RocketLeagueStats.Web/wwwroot/.gitkeep
@@ -138,18 +146,18 @@ src/RocketLeagueStats.Web/wwwroot/*
 !src/RocketLeagueStats.Web/wwwroot/.gitkeep
 ```
 
-- [ ] **Step 5:** Add the project to the solution.
+- [ ] **Step 6:** Add the project to the solution.
 
 Run: `dotnet sln RocketLeagueStats.sln add src/RocketLeagueStats.Web/RocketLeagueStats.Web.csproj`
 
 Expected: solution file gains the project entry.
 
-- [ ] **Step 6:** Verify it builds.
+- [ ] **Step 7:** Verify it builds.
 
 Run: `dotnet build src/RocketLeagueStats.Web/RocketLeagueStats.Web.csproj -c Debug`
 Expected: build succeeds, 0 warnings.
 
-- [ ] **Step 7:** Commit.
+- [ ] **Step 8:** Commit.
 
 ```bash
 git add Directory.Packages.props RocketLeagueStats.sln src/RocketLeagueStats.Web/ .gitignore
@@ -226,6 +234,8 @@ Create `tests/RocketLeagueStats.Web.Tests/SmokeTests.cs`:
 ```csharp
 namespace RocketLeagueStats.Web.Tests;
 
+using Xunit;
+
 public sealed class SmokeTests
 {
     [Fact]
@@ -273,13 +283,9 @@ In `src/RocketLeagueStats.Console/RocketLeagueStats.Console.csproj`, change `<Pr
 </Project>
 ```
 
-- [ ] **Step 2:** Replace `src/RocketLeagueStats.Console/Program.cs` to use `WebApplication.CreateBuilder`:
+- [ ] **Step 2:** Replace `src/RocketLeagueStats.Console/Program.cs` to use `WebApplication.CreateBuilder`. Note: `Microsoft.NET.Sdk.Web` provides implicit usings for `Microsoft.AspNetCore.*` and `Microsoft.Extensions.*` framework namespaces — listing them explicitly fires `IDE0005` under `EnforceCodeStyleInBuild`. Only retain `using` directives that aren't covered by the SDK's implicit-usings set:
 
 ```csharp
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using RocketLeagueStats.Console.HostedServices;
 using RocketLeagueStats.Core.DependencyInjection;
 using Serilog;
@@ -680,28 +686,28 @@ namespace RocketLeagueStats.Web.Hubs;
 public interface IStatsHubClient
 {
     /// <summary>A goal was scored.</summary>
-    Task OnGoal(GoalDto goal);
+    public Task OnGoal(GoalDto goal);
 
     /// <summary>A statfeed event (save, demo, epic save, etc.) occurred.</summary>
-    Task OnStatfeed(StatfeedDto statfeed);
+    public Task OnStatfeed(StatfeedDto statfeed);
 
     /// <summary>A new match started — fired on MatchInitialized.</summary>
-    Task OnMatchInitialized(MatchHeaderDto header);
+    public Task OnMatchInitialized(MatchHeaderDto header);
 
     /// <summary>A match ended — fired on MatchEnded.</summary>
-    Task OnMatchEnded(MatchSummaryDto summary);
+    public Task OnMatchEnded(MatchSummaryDto summary);
 
     /// <summary>Match clock tick — at most 1 Hz, only fired when integer-seconds value changes.</summary>
-    Task OnClockTick(int matchClockSeconds);
+    public Task OnClockTick(int matchClockSeconds);
 
     /// <summary>Per-player running tallies — broadcast only when at least one row changes.</summary>
-    Task OnPlayerStatsTick(PlayerStatsRowDto[] rows);
+    public Task OnPlayerStatsTick(PlayerStatsRowDto[] rows);
 
     /// <summary>Connection state to RL's TCP API changed.</summary>
-    Task OnConnectionState(ConnectionStateDto state);
+    public Task OnConnectionState(ConnectionStateDto state);
 
     /// <summary>Match phase changed (idle ↔ live).</summary>
-    Task OnPhaseChanged(MatchPhase phase);
+    public Task OnPhaseChanged(MatchPhase phase);
 }
 ```
 
@@ -2296,20 +2302,10 @@ internal sealed class LiveMatchProjector : BackgroundService
         return true;
     }
 
-    private static int ExtractSeconds(ClockUpdatedSecondsEvent evt)
-    {
-        // Core's ClockUpdatedSecondsEvent shape — verify field name with the actual file.
-        // Fallback to reflection if needed; for compile-time safety, this should be replaced
-        // with the real property reference once the type is confirmed.
-        var prop = evt.GetType().GetProperty("Seconds")
-                   ?? evt.GetType().GetProperty("ClockSeconds")
-                   ?? evt.GetType().GetProperty("Time");
-        return prop is null ? 0 : (int)Convert.ChangeType(prop.GetValue(evt) ?? 0, typeof(int));
-    }
 }
 ```
 
-> **Note for implementer:** the `ExtractSeconds` reflection fallback is a defensive placeholder — when starting Task 3.7, **first read** `src/RocketLeagueStats.Core/Events/ClockUpdatedSecondsEvent.cs` to learn the actual property name, then replace `ExtractSeconds` with a direct property access. Reflection here is a code smell we want gone before we ship.
+The `ClockUpdatedSecondsEvent` exposes the elapsed seconds as `TimeSeconds` (verified during Phase 3 implementation). Use `evt.TimeSeconds` directly — no reflection.
 
 - [ ] **Step 3:** Verify build.
 

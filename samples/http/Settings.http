@@ -1,0 +1,15 @@
+@host = http://localhost:5000
+
+### Get settings (defaults if none saved)
+GET {{host}}/api/settings
+Accept: application/json
+
+### Save player name + friend list
+PUT {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "playerName": "Hellcat",
+  "friendNames": ["Stinkmaster", "Sub"],
+  "showTrainingInHistory": false
+}

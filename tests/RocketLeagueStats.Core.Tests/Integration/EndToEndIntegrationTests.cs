@@ -6,7 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
-using RocketLeagueStats.Console.HostedServices;
+using RocketLeagueStats.Core.HostedServices;
 using RocketLeagueStats.Core.Bus;
 using RocketLeagueStats.Core.Configuration;
 using RocketLeagueStats.Core.Connection;
