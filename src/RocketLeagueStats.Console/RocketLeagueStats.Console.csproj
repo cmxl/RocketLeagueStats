@@ -6,6 +6,7 @@
     <AssemblyName>RocketLeagueStats</AssemblyName>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <ApplicationIcon>../../assets/RocketLeagueStats.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
