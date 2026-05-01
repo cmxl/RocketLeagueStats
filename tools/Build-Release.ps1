@@ -62,7 +62,7 @@ $shaPath      = "$zipPath.sha256"
 # suffix (e.g. "1.2.3-rc1" -> "1.2.3.0") before passing to MSBuild.
 $numericVersion = ($Version -replace '-.*$', '') + '.0'
 
-Write-Host "Building RocketLeagueStats v$Version ($Runtime, self-contained)" -ForegroundColor Cyan
+Write-Host "Building RocketLeagueStats v$Version ($Runtime)" -ForegroundColor Cyan
 
 if (-not $SkipTests) {
     Write-Host "`n[1/4] Running tests..." -ForegroundColor Yellow
@@ -84,7 +84,7 @@ Write-Host "`n[3/4] Publishing..." -ForegroundColor Yellow
 dotnet publish $projectPath `
     -c $Configuration `
     -r $Runtime `
-    --self-contained true `
+    -p:SelfContained=false `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:Version=$Version `
