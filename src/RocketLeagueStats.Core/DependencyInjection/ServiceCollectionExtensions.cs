@@ -30,18 +30,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGameInstallLocator, GameInstallLocator>();
         services.AddSingleton<IStatsApiConfigWriter, StatsApiConfigWriter>();
 
-        services.AddDbContext<StatsDbContext>((sp, opts) =>
+        var connectionString = configuration.GetConnectionString("Stats");
+        if (string.IsNullOrWhiteSpace(connectionString))
         {
-            var connection = configuration.GetConnectionString("Stats");
-            if (!string.IsNullOrWhiteSpace(connection))
-            {
-                opts.UseSqlServer(connection);
-            }
-            else
-            {
-                opts.UseInMemoryDatabase("RocketLeagueStats-Disabled");   // tooling stub when no connection
-            }
-        });
+            connectionString = "Data Source=:memory:";   // temporary stub; replaced in Task 4
+        }
+        services.AddDbContext<StatsDbContext>(opts => opts.UseSqlite(connectionString));
 
         return services;
     }
