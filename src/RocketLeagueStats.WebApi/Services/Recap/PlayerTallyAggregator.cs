@@ -52,7 +52,19 @@ internal static class PlayerTallyAggregator
                     case StatfeedType.Other:
                     case StatfeedType.Hattrick:
                     case StatfeedType.MvpHattrick:
+                    case StatfeedType.Savior:
+                    case StatfeedType.BicycleHit:
+                    case StatfeedType.Damage:
+                    case StatfeedType.UltraDamage:
+                    case StatfeedType.AerialGoal:
+                    case StatfeedType.BackwardsGoal:
+                    case StatfeedType.OvertimeGoal:
+                    case StatfeedType.Mvp:
+                    case StatfeedType.Win:
                     default:
+                        // Display-only event categories — surfaced in the timeline but not
+                        // counted in the per-player tally (those are derived from goals/saves
+                        // and the existing demolish/save buckets).
                         break;
                 }
             }

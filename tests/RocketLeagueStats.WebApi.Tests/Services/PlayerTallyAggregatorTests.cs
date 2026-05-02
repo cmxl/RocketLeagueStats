@@ -134,6 +134,7 @@ public sealed class PlayerTallyAggregatorTests
         Timestamp: DateTime.UtcNow,
         MatchClockSeconds: 60,
         Type: type,
+        DisplayName: type.ToString(),
         MainTarget: main,
         SecondaryTarget: secondary);
 }

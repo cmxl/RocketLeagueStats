@@ -16,8 +16,8 @@ interface LiveMatchState {
   blueScore: number;
   orangeScore: number;
   playerStats: PlayerStatsRow[];
-  recentGoals: Goal[];
-  recentStatfeeds: Statfeed[];
+  goals: Goal[];
+  statfeeds: Statfeed[];
   lastGoalAt: Date | null;
   gameConnected: boolean;
   pendingGoalOverlay: Goal | null;
@@ -30,8 +30,8 @@ const initialState: LiveMatchState = {
   blueScore: 0,
   orangeScore: 0,
   playerStats: [],
-  recentGoals: [],
-  recentStatfeeds: [],
+  goals: [],
+  statfeeds: [],
   lastGoalAt: null,
   gameConnected: true,
   pendingGoalOverlay: null,
@@ -48,8 +48,11 @@ export const LiveMatchStore = signalStore(
     const hub = inject(StatsHubClient);
     const toast = inject(ToastStore);
 
+    // Goals and statfeeds are uncapped — the live view keeps the entire match history so the
+    // action feed can scroll back to the start. New events go on top (newest-first), matching
+    // the server-side LiveMatchState.
     const handleGoal = (g: Goal) => patchState(store, (s) => ({
-      recentGoals: [g, ...s.recentGoals].slice(0, 8),
+      goals: [g, ...s.goals],
       blueScore: g.blueScoreAfter,
       orangeScore: g.orangeScoreAfter,
       lastGoalAt: new Date(g.timestamp),
@@ -59,7 +62,7 @@ export const LiveMatchStore = signalStore(
     const dismissGoalOverlay = () => patchState(store, { pendingGoalOverlay: null });
 
     const handleStatfeed = (sf: Statfeed) => patchState(store, (s) => ({
-      recentStatfeeds: [sf, ...s.recentStatfeeds].slice(0, 8),
+      statfeeds: [sf, ...s.statfeeds],
     }));
 
     const refreshFromServer = rxMethod<void>(pipe(
@@ -71,8 +74,8 @@ export const LiveMatchStore = signalStore(
         blueScore: state.blueScore,
         orangeScore: state.orangeScore,
         playerStats: state.playerStats,
-        recentGoals: state.recentGoals,
-        recentStatfeeds: state.recentStatfeeds,
+        goals: state.goals,
+        statfeeds: state.statfeeds,
         lastGoalAt: state.lastGoalAt ? new Date(state.lastGoalAt) : null,
         gameConnected: state.connection.connectedToGame,
       })),
@@ -95,7 +98,7 @@ export const LiveMatchStore = signalStore(
           patchState(store, { gameConnected: c.connectedToGame }));
         hub.onMatchInitialized((h) => patchState(store, {
           currentMatch: h, blueScore: 0, orangeScore: 0,
-          playerStats: [], recentGoals: [], recentStatfeeds: [],
+          playerStats: [], goals: [], statfeeds: [],
           clockSeconds: 0, lastGoalAt: null, pendingGoalOverlay: null,
         }));
         // Roster grew mid-match (server discovered a new player from a goal/statfeed event).

@@ -8,6 +8,7 @@ import { SpeedLeaderboardComponent } from './speed-leaderboard.component';
 import { GoalTimelineChartComponent } from './goal-timeline.chart.component';
 import { TimeBetweenGoalsChartComponent } from './time-between-goals.chart.component';
 import { GameFlowChartComponent } from './game-flow.chart.component';
+import { EventTimelineComponent } from './event-timeline.component';
 
 @Component({
   selector: 'rls-recap-view',
@@ -21,6 +22,7 @@ import { GameFlowChartComponent } from './game-flow.chart.component';
     GoalTimelineChartComponent,
     TimeBetweenGoalsChartComponent,
     GameFlowChartComponent,
+    EventTimelineComponent,
   ],
   template: `
     @if (recap.isLoading()) {
@@ -41,6 +43,11 @@ import { GameFlowChartComponent } from './game-flow.chart.component';
         }
         <rls-player-stats-table [rows]="r.playerStats" />
         <rls-speed-leaderboard [recap]="r" />
+        @defer (on viewport) {
+          <rls-event-timeline [recap]="r" />
+        } @placeholder {
+          <div class="charts-placeholder">Event timeline loading…</div>
+        }
       </div>
     }
   `,

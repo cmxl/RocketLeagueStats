@@ -16,8 +16,10 @@ export interface LiveState {
   blueScore: number;
   orangeScore: number;
   playerStats: PlayerStatsRow[];
-  recentGoals: Goal[];
-  recentStatfeeds: Statfeed[];
+  /** Full match history of goals, newest first. */
+  goals: Goal[];
+  /** Full match history of statfeed events, newest first. */
+  statfeeds: Statfeed[];
   lastGoalAt: string | null;
   connection: ConnectionState;
 }

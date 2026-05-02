@@ -2,19 +2,20 @@ import { Component, ChangeDetectionStrategy, input } from '@angular/core';
 import { Goal } from '../../core/models/goal';
 import { Statfeed } from '../../core/models/statfeed';
 import { DurationPipe } from '../../shared/pipes/duration.pipe';
+import { StatfeedIconPipe } from '../../shared/pipes/statfeed-icon.pipe';
 
 @Component({
   selector: 'rls-action-feed-item',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DurationPipe],
+  imports: [DurationPipe, StatfeedIconPipe],
   template: `
     @switch (kind()) {
       @case ('goal') {
         @let g = asGoal();
         @if (g) {
           <div class="feed-item feed-item--goal" [class.feed-item--blue]="g.scorer.team === 'blue'" [class.feed-item--orange]="g.scorer.team === 'orange'">
-            <span class="feed-item__icon">&#9918;</span>
+            <span class="feed-item__icon" aria-hidden="true">⚽</span>
             <span class="feed-item__text">
               <strong>{{ g.scorer.name }}</strong> scored
               @if (g.assister) { <span class="feed-item__assist"> (assist: {{ g.assister.name }})</span> }
@@ -27,9 +28,9 @@ import { DurationPipe } from '../../shared/pipes/duration.pipe';
         @let sf = asStatfeed();
         @if (sf) {
           <div class="feed-item feed-item--statfeed" [class.feed-item--blue]="sf.mainTarget.team === 'blue'" [class.feed-item--orange]="sf.mainTarget.team === 'orange'">
-            <span class="feed-item__icon">&#9889;</span>
+            <span class="feed-item__icon" aria-hidden="true">{{ sf.type | statfeedIcon }}</span>
             <span class="feed-item__text">
-              <strong>{{ sf.mainTarget.name }}</strong> — {{ sf.type }}
+              <strong>{{ sf.mainTarget.name }}</strong> — {{ sf.displayName }}
               @if (sf.secondaryTarget) { <span class="feed-item__secondary"> on {{ sf.secondaryTarget.name }}</span> }
             </span>
             <span class="feed-item__time">{{ sf.matchClockSeconds | duration }}</span>

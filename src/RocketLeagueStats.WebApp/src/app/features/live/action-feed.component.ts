@@ -31,9 +31,9 @@ interface FeedEntry {
     </div>
   `,
   styles: [`
-    .action-feed { display: flex; flex-direction: column; gap: 0; }
-    .action-feed__title { font-family: var(--font-header); font-size: var(--text-sm); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 0.5rem; padding: 0 0.75rem; }
-    .action-feed__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+    .action-feed { display: flex; flex-direction: column; gap: 0; min-height: 0; height: 100%; }
+    .action-feed__title { font-family: var(--font-header); font-size: var(--text-sm); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 0.5rem; padding: 0 0.75rem; flex-shrink: 0; }
+    .action-feed__list { list-style: none; margin: 0; padding: 0 0.25rem; display: flex; flex-direction: column; gap: 0.25rem; overflow-y: auto; min-height: 0; flex: 1; }
     .action-feed__item { animation: rls-fade-in 200ms ease; }
     .action-feed__empty { padding: 0.75rem; color: var(--text-muted); font-size: var(--text-sm); text-align: center; }
   `],
@@ -41,19 +41,26 @@ interface FeedEntry {
 export class ActionFeedComponent {
   private readonly live = inject(LiveMatchStore);
 
+  // Live awareness focuses on recent activity; the underlying store keeps the full match history
+  // (consumed by the recap timeline). Cap render to the newest 30 here — the list scrolls if the
+  // user wants to look further back.
+  private static readonly MAX_VISIBLE_ENTRIES = 30;
+
   protected readonly entries = computed<FeedEntry[]>(() => {
-    const goals = this.live.recentGoals().map(g => ({
+    const goals = this.live.goals().map(g => ({
       id: g.id,
       kind: 'goal' as const,
       event: g,
       ts: g.timestamp,
     }));
-    const sfs = this.live.recentStatfeeds().map((s, i) => ({
+    const sfs = this.live.statfeeds().map((s, i) => ({
       id: `sf-${s.timestamp}-${i}`,
       kind: 'statfeed' as const,
       event: s,
       ts: s.timestamp,
     }));
-    return [...goals, ...sfs].sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 8);
+    return [...goals, ...sfs]
+      .sort((a, b) => b.ts.localeCompare(a.ts))
+      .slice(0, ActionFeedComponent.MAX_VISIBLE_ENTRIES);
   });
 }

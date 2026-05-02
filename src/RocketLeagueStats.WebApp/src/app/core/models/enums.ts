@@ -7,6 +7,8 @@ export type MatchType =
   | 'online' | 'offline';   // coarse fallbacks until snapshot parsing refines them
 
 export type StatfeedType =
-  | 'other' | 'save' | 'epicSave' | 'demolish' | 'hattrick' | 'mvpHattrick';
+  | 'other' | 'save' | 'epicSave' | 'demolish' | 'hattrick' | 'mvpHattrick'
+  | 'savior' | 'bicycleHit' | 'damage' | 'ultraDamage'
+  | 'aerialGoal' | 'backwardsGoal' | 'overtimeGoal' | 'mvp' | 'win';
 
 export type HistorySort = 'mostRecent' | 'highestScoring';

@@ -19,10 +19,8 @@ internal sealed class LiveMatchState
     private DateTime? lastGoalTimestamp;
     private bool isGameConnected = true;
     private DateTime? lastEventAt;
-    private readonly List<GoalDto> recentGoals = new(capacity: 16);
-    private readonly List<StatfeedDto> recentStatfeeds = new(capacity: 16);
-    private readonly List<GoalDto> goalsThisMatch = [];
-    private readonly List<StatfeedDto> statfeedsThisMatch = [];
+    private readonly List<GoalDto> goals = [];
+    private readonly List<StatfeedDto> statfeeds = [];
 
     public MatchPhase Phase => this.activeMatch is null ? MatchPhase.Idle : MatchPhase.Live;
 
@@ -32,9 +30,11 @@ internal sealed class LiveMatchState
 
     public int OrangeScore => this.orangeGoals;
 
-    public IReadOnlyList<GoalDto> RecentGoals => this.recentGoals;
+    /// <summary>All goals captured this match, newest first.</summary>
+    public IReadOnlyList<GoalDto> Goals => this.goals;
 
-    public IReadOnlyList<StatfeedDto> RecentStatfeeds => this.recentStatfeeds;
+    /// <summary>All statfeed events captured this match, newest first.</summary>
+    public IReadOnlyList<StatfeedDto> Statfeeds => this.statfeeds;
 
     public PlayerStatsRowDto[] CurrentPlayerStats()
     {
@@ -44,7 +44,7 @@ internal sealed class LiveMatchState
         }
 
         PlayerRefDto[] allPlayers = [.. this.activeMatch.BluePlayers, .. this.activeMatch.OrangePlayers];
-        return PlayerTallyAggregator.Aggregate(allPlayers, this.goalsThisMatch, this.statfeedsThisMatch, markMvp: false);
+        return PlayerTallyAggregator.Aggregate(allPlayers, this.goals, this.statfeeds, markMvp: false);
     }
 
     public void BeginMatch(MatchHeaderDto header)
@@ -56,10 +56,8 @@ internal sealed class LiveMatchState
             this.orangeGoals = 0;
             this.elapsedSeconds = null;
             this.lastGoalTimestamp = null;
-            this.recentGoals.Clear();
-            this.recentStatfeeds.Clear();
-            this.goalsThisMatch.Clear();
-            this.statfeedsThisMatch.Clear();
+            this.goals.Clear();
+            this.statfeeds.Clear();
         }
     }
 
@@ -102,14 +100,9 @@ internal sealed class LiveMatchState
             this.lastGoalTimestamp = goal.Timestamp;
             this.lastEventAt = DateTime.UtcNow;
 
+            // Insert at index 0 so consumers see newest-first; the full match history is retained.
             var withScores = goal with { BlueScoreAfter = this.blueGoals, OrangeScoreAfter = this.orangeGoals };
-            this.recentGoals.Insert(0, withScores);
-            if (this.recentGoals.Count > 8)
-            {
-                this.recentGoals.RemoveAt(this.recentGoals.Count - 1);
-            }
-
-            this.goalsThisMatch.Add(withScores);
+            this.goals.Insert(0, withScores);
         }
     }
 
@@ -118,13 +111,7 @@ internal sealed class LiveMatchState
         lock (this.syncLock)
         {
             this.lastEventAt = DateTime.UtcNow;
-            this.recentStatfeeds.Insert(0, statfeed);
-            if (this.recentStatfeeds.Count > 8)
-            {
-                this.recentStatfeeds.RemoveAt(this.recentStatfeeds.Count - 1);
-            }
-
-            this.statfeedsThisMatch.Add(statfeed);
+            this.statfeeds.Insert(0, statfeed);
         }
     }
 
@@ -154,9 +141,9 @@ internal sealed class LiveMatchState
             }
 
             PlayerRefDto[] allPlayers = [.. this.activeMatch.BluePlayers, .. this.activeMatch.OrangePlayers];
-            var stats = PlayerTallyAggregator.Aggregate(allPlayers, this.goalsThisMatch, this.statfeedsThisMatch, markMvp: true);
+            var stats = PlayerTallyAggregator.Aggregate(allPlayers, this.goals, this.statfeeds, markMvp: true);
             var mvp = stats.FirstOrDefault(r => r.IsMvp)?.Player;
-            var fastestGoal = this.goalsThisMatch
+            var fastestGoal = this.goals
                 .OrderByDescending(g => g.GoalSpeedUuPerSec)
                 .FirstOrDefault();
 
@@ -170,7 +157,7 @@ internal sealed class LiveMatchState
                 OrangeScore: this.orangeGoals,
                 AllPlayers: allPlayers,
                 Mvp: mvp,
-                TotalGoals: this.goalsThisMatch.Count,
+                TotalGoals: this.goals.Count,
                 FastestGoal: fastestGoal);
 
             this.activeMatch = null;
@@ -190,8 +177,8 @@ internal sealed class LiveMatchState
                 BlueScore: this.blueGoals,
                 OrangeScore: this.orangeGoals,
                 PlayerStats: this.CurrentPlayerStats(),
-                RecentGoals: [.. this.recentGoals],
-                RecentStatfeeds: [.. this.recentStatfeeds],
+                Goals: [.. this.goals],
+                Statfeeds: [.. this.statfeeds],
                 LastGoalAt: this.lastGoalTimestamp,
                 Connection: new ConnectionStateDto(this.isGameConnected, this.lastEventAt));
         }

@@ -152,7 +152,7 @@ internal sealed partial class LiveMatchProjector(
 
         var dto = EventMapper.ToDto(evt, this.currentClockSeconds, secondsSinceLastGoal);
         state.AppendGoal(dto);
-        var stamped = state.RecentGoals[0];
+        var stamped = state.Goals[0];
         history.AppendGoal(this.currentMatchId, stamped);
         this.lastGoalTimestamp = stamped.Timestamp;
 
@@ -164,6 +164,16 @@ internal sealed partial class LiveMatchProjector(
     private async Task HandleStatfeedAsync(StatfeedEvent evt)
     {
         if (this.currentMatchId is null)
+        {
+            return;
+        }
+
+        // Skip statfeeds that duplicate signal already carried by GoalScoredEvent. RL fires a
+        // "Goal" statfeed for every scored goal and an "Assist" statfeed for every assisted goal,
+        // both of which we already capture with full context (speed, location, score-after) on
+        // the GoalDto path. The qualifier variants — AerialGoal, BackwardsGoal, OvertimeGoal —
+        // are kept; they enrich beyond what GoalScoredEvent carries.
+        if (evt.StatName is "Goal" or "Assist")
         {
             return;
         }

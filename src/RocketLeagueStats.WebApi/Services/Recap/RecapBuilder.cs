@@ -6,9 +6,11 @@ internal static class RecapBuilder
 {
     public static MatchRecapDto Build(MatchRecord record)
     {
-        PlayerRefDto[] allPlayers = [.. record.Header.BluePlayers, .. record.Header.OrangePlayers];
+        // Summary.AllPlayers carries the lazily-discovered roster captured at match end;
+        // record.Header is sealed at MatchInitialized when RL hasn't surfaced the roster yet
+        // (see LiveMatchProjector.MaybeUpdateRosterAsync — it only updates LiveMatchState).
         var playerStats = PlayerTallyAggregator.Aggregate(
-            allPlayers,
+            record.Summary!.AllPlayers,
             record.Goals,
             record.Statfeeds,
             markMvp: true);

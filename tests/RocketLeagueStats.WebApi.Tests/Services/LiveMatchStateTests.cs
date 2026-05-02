@@ -54,7 +54,7 @@ public sealed class LiveMatchStateTests
     }
 
     [Fact]
-    public void Goal_increments_team_score_and_appends_to_recent()
+    public void Goal_increments_team_score_and_appends_to_goals()
     {
         var state = new LiveMatchState();
         state.BeginMatch(SampleHeader());
@@ -62,20 +62,20 @@ public sealed class LiveMatchStateTests
         state.AppendGoal(goal);
         Assert.Equal(1, state.BlueScore);
         Assert.Equal(0, state.OrangeScore);
-        Assert.Single(state.RecentGoals);
+        Assert.Single(state.Goals);
     }
 
     [Fact]
-    public void RecentGoals_caps_at_8_newest_first()
+    public void Goals_retains_full_match_history_newest_first()
     {
         var state = new LiveMatchState();
         state.BeginMatch(SampleHeader());
-        for (var i = 0; i < 10; i++)
+        for (var i = 0; i < 25; i++)
         {
             state.AppendGoal(SampleGoal("blue"));
         }
 
-        Assert.Equal(8, state.RecentGoals.Count);
+        Assert.Equal(25, state.Goals.Count);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class LiveMatchStateTests
         state.AppendGoal(SampleGoal("blue"));    // blueScore = 1
         state.AppendGoal(SampleGoal("blue"));    // blueScore = 2
         Assert.Equal(2, state.BlueScore);
-        Assert.Equal(2, state.RecentGoals.Count);
+        Assert.Equal(2, state.Goals.Count);
 
         var newBlue = new[] { new PlayerRefDto("Hellcat", 1, "blue"), new PlayerRefDto("Sub", 2, "blue") };
         var newOrange = new[] { new PlayerRefDto("Stink", 3, "orange") };
@@ -123,7 +123,7 @@ public sealed class LiveMatchStateTests
         Assert.Single(updated.OrangePlayers);
         // Scores and feeds preserved:
         Assert.Equal(2, state.BlueScore);
-        Assert.Equal(2, state.RecentGoals.Count);
+        Assert.Equal(2, state.Goals.Count);
     }
 
     [Fact]

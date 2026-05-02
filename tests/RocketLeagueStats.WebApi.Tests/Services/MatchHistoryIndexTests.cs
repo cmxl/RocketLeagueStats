@@ -102,4 +102,58 @@ public sealed class MatchHistoryIndexTests
         Assert.NotNull(recap);
         Assert.Equal(header.MatchId, recap!.Summary.MatchId);
     }
+
+    [Fact]
+    public void GetRecap_populates_player_stats_when_header_roster_was_empty_at_init()
+    {
+        // Reproduces the production data flow: RL's MatchInitialized event doesn't carry a
+        // roster, so LiveMatchProjector registers a header with empty BluePlayers/OrangePlayers.
+        // Players are discovered lazily from goal/statfeed events and only end up in
+        // Summary.AllPlayers (via LiveMatchState.EndMatch). If the recap is built from the
+        // header, playerStats is empty and the Angular table renders no rows.
+        var index = new MatchHistoryIndex();
+        var emptyHeader = new MatchHeaderDto(
+            MatchId: "match-empty-roster",
+            StartedAt: DateTime.UtcNow,
+            Type: MatchType.Casual,
+            PlaylistRaw: string.Empty,
+            BluePlayers: [],
+            OrangePlayers: [],
+            ArenaName: null);
+        var hellcat = new PlayerRefDto("Hellcat", 1, "blue");
+        var stink = new PlayerRefDto("Stink", 2, "orange");
+        var goal = new GoalDto(
+            Id: Guid.NewGuid().ToString(),
+            Timestamp: DateTime.UtcNow,
+            MatchClockSeconds: 60,
+            Scorer: hellcat,
+            Assister: null,
+            GoalSpeedUuPerSec: 1500,
+            ImpactLocation: new Vec3Dto(0, 0, 0),
+            BlueScoreAfter: 1,
+            OrangeScoreAfter: 0,
+            SecondsSinceLastGoal: 60);
+
+        index.BeginMatch(emptyHeader);
+        index.AppendGoal(emptyHeader.MatchId, goal);
+        index.CompleteMatch(emptyHeader.MatchId, new MatchSummaryDto(
+            MatchId: emptyHeader.MatchId,
+            StartedAt: emptyHeader.StartedAt,
+            EndedAt: emptyHeader.StartedAt.AddMinutes(5),
+            DurationSeconds: 300,
+            Type: emptyHeader.Type,
+            BlueScore: 1,
+            OrangeScore: 0,
+            AllPlayers: [hellcat, stink],
+            Mvp: hellcat,
+            TotalGoals: 1,
+            FastestGoal: goal));
+
+        var recap = index.GetRecap(emptyHeader.MatchId);
+        Assert.NotNull(recap);
+        Assert.Equal(2, recap!.PlayerStats.Length);
+        var hellcatRow = recap.PlayerStats.Single(r => r.Player.Shortcut == 1);
+        Assert.Equal(1, hellcatRow.Goals);
+        Assert.True(hellcatRow.IsMvp);
+    }
 }

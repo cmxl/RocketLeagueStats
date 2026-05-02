@@ -55,13 +55,15 @@ import { KmhPipe } from '../../shared/pipes/kmh.pipe';
     .stats-table { width: 100%; border-collapse: collapse; font-family: var(--font-body); font-size: var(--text-sm); }
     .stats-table th { font-family: var(--font-header); font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; text-align: center; padding: 0.375rem 0.5rem; border-bottom: 1px solid var(--text-muted); }
     .stats-table th:first-child { text-align: left; }
-    .stats-table td { padding: 0.375rem 0.5rem; text-align: center; color: var(--text-primary); border-bottom: 1px solid color-mix(in srgb, var(--text-muted) 40%, transparent); }
+    .stats-table td { padding: 0.375rem 0.5rem; text-align: center; color: var(--text-primary); border-bottom: 1px solid color-mix(in srgb, var(--text-muted) 40%, transparent); vertical-align: middle; line-height: 1.4; }
     .stats-table td:first-child { text-align: left; }
     .row--blue td:first-child { color: var(--team-blue); }
     .row--orange td:first-child { color: var(--team-orange); }
     .row--mvp { background: color-mix(in srgb, var(--accent-mvp) 8%, transparent); }
-    .player-cell { display: flex; align-items: center; gap: 0.5rem; }
-    .mvp-badge { font-size: var(--text-xs); background: var(--accent-mvp); color: var(--bg-base); padding: 0.1rem 0.3rem; border-radius: 2px; font-weight: 700; font-family: var(--font-header); }
+    /* Keep the player TD as a regular table-cell so it aligns with the numeric columns;
+       the MVP badge rides as inline-block so it doesn't push the row taller. */
+    .player-cell { white-space: nowrap; }
+    .mvp-badge { display: inline-block; margin-left: 0.4rem; vertical-align: middle; font-size: var(--text-xs); background: var(--accent-mvp); color: var(--bg-base); padding: 0.1rem 0.3rem; border-radius: 2px; font-weight: 700; font-family: var(--font-header); line-height: 1; }
     .score-cell { font-family: var(--font-display); font-size: var(--text-base); color: var(--accent-mvp); }
   `],
 })
