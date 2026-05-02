@@ -501,6 +501,9 @@ public sealed class StatsDbContext(DbContextOptions<StatsDbContext> options) : D
                 .HasForeignKey(x => x.MatchGuid)
                 .HasPrincipalKey(m => m.MatchGuid)
                 .OnDelete(DeleteBehavior.Cascade)
+                // IsRequired(false) is explicit because EF would otherwise infer "required" from the
+                // string property type and emit NOT NULL on the FK column; we need the column nullable
+                // so events that arrive before a MatchGuid is known can still be persisted.
                 .IsRequired(false);
         });
 
@@ -526,6 +529,8 @@ public sealed class StatsDbContext(DbContextOptions<StatsDbContext> options) : D
             b.Property(x => x.MatchGuid).HasMaxLength(64).IsRequired();
             b.Property(x => x.PlayerName).HasMaxLength(128).IsRequired();
             b.Property(x => x.Role).HasMaxLength(32).IsRequired();
+            // IsDescending(false, true) means PlayerName ASC, TimestampUtc DESC — recent events for a
+            // player should be the cheap end of the index walk for "last 30 days for X" queries.
             b.HasIndex(x => new { x.PlayerName, x.TimestampUtc })
                 .IsDescending(false, true)
                 .HasDatabaseName("IX_EventParticipants_PlayerName_TimestampUtc");
@@ -678,7 +683,10 @@ public sealed class SqliteFixture : IAsyncLifetime, IDisposable
 
     public void Dispose()
     {
-        // Ensure SQLite has released file handles before deletion (WAL files included).
+        // Microsoft.Data.Sqlite pools connections by connection string. EF's DbContext disposes its
+        // connection but does NOT remove it from the pool — the file handle stays alive until the
+        // pool releases it. ClearAllPools() forces release so the temp .db / .db-wal / .db-shm files
+        // can be deleted on Windows (which holds open files exclusively).
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
         TryDelete(this.filePath);
@@ -1284,14 +1292,25 @@ Replace the existing `FlushAsync` method with:
 
     private async Task FlushAsync(IReadOnlyList<StatsEvent> batch, CancellationToken cancellationToken)
     {
+        // We open a fresh connection per batch instead of holding one for the lifetime of the service.
+        // The connection-pool inside Microsoft.Data.Sqlite means this is cheap (the underlying SQLite
+        // handle is reused), but it gives us automatic recovery: if a connection ever enters a bad
+        // state we discard it on Dispose and the next batch gets a clean one. EF Core's DbContext
+        // would normally manage this for us; raw ADO.NET pushes the responsibility back to us.
         await using var connection = new SqliteConnection(this.connectionString);
         await connection.OpenAsync(cancellationToken);
         ApplyPragmas(connection);
 
+        // BeginTransactionAsync returns DbTransaction; we cast to SqliteTransaction so the
+        // commands' Transaction property gets the concrete type (Microsoft.Data.Sqlite's
+        // SqliteCommand.Transaction is typed as SqliteTransaction, not DbTransaction).
         await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
         await using var insertEvent = connection.CreateCommand();
         insertEvent.Transaction = tx;
+        // RETURNING Id requires SQLite >= 3.35 (bundled with Microsoft.Data.Sqlite 10). Saves a
+        // round-trip vs the older `last_insert_rowid()` pattern; matters because we issue this
+        // INSERT once per discrete event and need the Id for the subsequent participant rows.
         insertEvent.CommandText = """
             INSERT INTO Events (MatchGuid, EventName, TimestampUtc, Payload)
             VALUES ($matchGuid, $eventName, $ts, $payload)
@@ -1323,6 +1342,11 @@ Replace the existing `FlushAsync` method with:
             pMatchGuid.Value = (object?)evt.MatchGuid ?? DBNull.Value;
             pEventName.Value = evt.EventName;
             pTimestamp.Value = ts;
+            // evt.GetType() (not typeof(StatsEvent)) — System.Text.Json must see the concrete derived
+            // type to emit the typed event's fields. Passing the base type would only serialize the
+            // three envelope properties (EventName/Timestamp/MatchGuid). The reflection-based path is
+            // intentional here: it covers UnknownDiscreteEvent and any future event types without
+            // updating StatsEventJsonContext.
             pPayload.Value = JsonSerializer.Serialize(evt, evt.GetType(), PayloadJsonOptions);
 
             var eventId = (long)(await insertEvent.ExecuteScalarAsync(cancellationToken))!;
@@ -1351,6 +1375,12 @@ Replace the existing `FlushAsync` method with:
     private static void ApplyPragmas(SqliteConnection connection)
     {
         using var cmd = connection.CreateCommand();
+        // PRAGMAs must be set per connection: SQLite stores them in connection state, not the file.
+        // Most importantly, foreign_keys=ON defaults to OFF on every new SQLite connection — EF Core's
+        // SQLite provider sets it for its DbContext connections automatically, but our raw writer
+        // pool does not. Without this we'd silently skip FK enforcement and let orphaned rows in.
+        // journal_mode=WAL is persisted in the file so it only "takes" the first time and is a no-op
+        // on subsequent connections; the redundant set is harmless and self-documenting.
         cmd.CommandText = """
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
@@ -1479,6 +1509,11 @@ And replace the `foreach (var evt in batch)` body with:
             pMatchGuid.Value = (object?)evt.MatchGuid ?? DBNull.Value;
             pEventName.Value = evt.EventName;
             pTimestamp.Value = ts;
+            // evt.GetType() (not typeof(StatsEvent)) — System.Text.Json must see the concrete derived
+            // type to emit the typed event's fields. Passing the base type would only serialize the
+            // three envelope properties (EventName/Timestamp/MatchGuid). The reflection-based path is
+            // intentional here: it covers UnknownDiscreteEvent and any future event types without
+            // updating StatsEventJsonContext.
             pPayload.Value = JsonSerializer.Serialize(evt, evt.GetType(), PayloadJsonOptions);
 
             var eventId = (long)(await insertEvent.ExecuteScalarAsync(cancellationToken))!;
@@ -1643,6 +1678,15 @@ Add a helper command and a per-batch aggregation pass in `FlushAsync`. After the
 ```csharp
         await using var upsertMatch = connection.CreateCommand();
         upsertMatch.Transaction = tx;
+        // SQLite UPSERT (ON CONFLICT … DO UPDATE) — `excluded.<col>` is the would-be-inserted value
+        // for that column on a conflict. EF Core has no first-class UPSERT API, so we do this in raw
+        // SQL rather than load + change-track + save (which would issue SELECT + INSERT/UPDATE for
+        // every match in every batch).
+        // - EventCount/SnapshotCount: ADD the per-batch delta to the existing total.
+        // - LastEventAtUtc: take the larger of existing vs new — events within a batch may not be
+        //   in arrival order if multiple subscribers race.
+        // - Lifecycle timestamps + WinnerTeamNum: COALESCE keeps the FIRST non-null value seen.
+        //   This means if MatchEnded fires twice (which it shouldn't), the original WinnerTeamNum wins.
         upsertMatch.CommandText = """
             INSERT INTO Matches (MatchGuid, FirstSeenAtUtc, EventCount, SnapshotCount, LastEventAtUtc,
                                   CreatedAtUtc, InitializedAtUtc, EndedAtUtc, DestroyedAtUtc, WinnerTeamNum)
@@ -1704,6 +1748,9 @@ Add a helper command and a per-batch aggregation pass in `FlushAsync`. After the
             matchAggregates[evt.MatchGuid] = agg;
         }
 
+        // Upsert all Matches BEFORE the per-event/snapshot inserts below — Events.MatchGuid and
+        // MatchSnapshots.MatchGuid are FKs to Matches.MatchGuid with foreign_keys=ON. Without this
+        // ordering, the first event of a brand-new match would fail with FOREIGN KEY constraint failed.
         foreach (var (guid, agg) in matchAggregates)
         {
             umMatchGuid.Value = guid;
@@ -2078,6 +2125,10 @@ internal sealed class EventStoreStartupService(
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // MigrateAsync opens its own internal SqliteConnection, applies pending migrations, and
+        // closes. The SqliteEventStoreService later opens its own short-lived connections per batch
+        // — the two never share a connection object. In WAL mode that's fine: SQLite handles
+        // concurrent file access from multiple connections via the WAL log without locking conflicts.
         await dbContext.Database.MigrateAsync(cancellationToken);
 
         var path = StatsConnectionString.ExtractDataSourcePath(connectionString.Value);
