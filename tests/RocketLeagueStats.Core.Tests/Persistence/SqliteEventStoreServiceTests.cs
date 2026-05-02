@@ -148,6 +148,59 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task Batching_FlushesAtMaxBatchSize()
+    {
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        // High latency forces the size trigger to fire first.
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 5, MaxBatchLatencyMs = 30_000 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+
+        await Task.Delay(100, cts.Token);
+
+        for (var i = 0; i < 5; i++)
+        {
+            bus.Publish(new ClockUpdatedSecondsEvent
+            {
+                EventName = KnownEvents.ClockUpdatedSeconds,
+                Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(i),
+                MatchGuid = "batch-size",
+                TimeSeconds = i,
+            });
+        }
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.Events.CountAsync(), expected: 5, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Batching_FlushesAtMaxBatchLatency()
+    {
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        // Large size forces the latency trigger to fire first.
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 1000, MaxBatchLatencyMs = 100 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+
+        await Task.Delay(100, cts.Token);
+
+        bus.Publish(new ClockUpdatedSecondsEvent
+        {
+            EventName = KnownEvents.ClockUpdatedSeconds,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(1),
+            MatchGuid = "batch-latency",
+            TimeSeconds = 1,
+        });
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.Events.CountAsync(), expected: 1, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task WritesBallHit_PersistsAllPlayersAsParticipants()
     {
         using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
