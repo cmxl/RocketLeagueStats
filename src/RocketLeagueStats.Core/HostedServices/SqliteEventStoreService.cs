@@ -172,9 +172,33 @@ internal sealed class SqliteEventStoreService(
         var ppRole = insertParticipant.Parameters.Add("$role", SqliteType.Text);
         var ppTimestamp = insertParticipant.Parameters.Add("$ts", SqliteType.Integer);
 
+        await using var insertSnapshot = connection.CreateCommand();
+        insertSnapshot.Transaction = tx;
+        insertSnapshot.CommandText = """
+            INSERT INTO MatchSnapshots (MatchGuid, TimestampUtc, Payload)
+            VALUES ($matchGuid, $ts, $payload);
+            """;
+        var spMatchGuid = insertSnapshot.Parameters.Add("$matchGuid", SqliteType.Text);
+        var spTimestamp = insertSnapshot.Parameters.Add("$ts", SqliteType.Integer);
+        var spPayload = insertSnapshot.Parameters.Add("$payload", SqliteType.Text);
+
         foreach (var evt in batch)
         {
             var ts = (evt.Timestamp ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
+
+            if (evt is MatchStateSnapshot snap)
+            {
+                if (snap.MatchGuid is null)
+                {
+                    continue;   // snapshots without a match guid have no home
+                }
+
+                spMatchGuid.Value = snap.MatchGuid;
+                spTimestamp.Value = ts;
+                spPayload.Value = snap.RawData.GetRawText();
+                await insertSnapshot.ExecuteNonQueryAsync(cancellationToken);
+                continue;
+            }
 
             pMatchGuid.Value = (object?)evt.MatchGuid ?? DBNull.Value;
             pEventName.Value = evt.EventName;

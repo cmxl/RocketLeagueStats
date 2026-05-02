@@ -78,6 +78,54 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
         Assert.Equal(["Jay", "Tobi"], participants.Select(p => p.PlayerName));
     }
 
+    [Fact]
+    public async Task WritesUpdateState_GoesToMatchSnapshotsTable()
+    {
+        // Pre-seed Match row to satisfy the MatchSnapshots.MatchGuid FK; Task 14's upsert will make
+        // this implicit.
+        await using (var seedCtx = this.fixture.CreateDbContext())
+        {
+            seedCtx.Matches.Add(new Match
+            {
+                MatchGuid = "match-snap",
+                FirstSeenAtUtc = DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds(),
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 4, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+
+        // Same subscription-timing reason as in WritesGoalScored.
+        await Task.Delay(100, cts.Token);
+
+        using var json = System.Text.Json.JsonDocument.Parse("""{"Game":{"Teams":[{"Score":1},{"Score":2}]}}""");
+
+        var snapshot = new MatchStateSnapshot
+        {
+            EventName = KnownEvents.UpdateState,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(1),
+            MatchGuid = "match-snap",
+            RawData = json.RootElement.Clone(),
+        };
+
+        bus.Publish(snapshot);
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.MatchSnapshots.CountAsync(), expected: 1, cts.Token);
+
+        await service.StopAsync(CancellationToken.None);
+
+        await using var ctx = this.fixture.CreateDbContext();
+        Assert.Equal(0, await ctx.Events.CountAsync());
+        var stored = await ctx.MatchSnapshots.SingleAsync();
+        Assert.Equal("match-snap", stored.MatchGuid);
+        Assert.Contains("\"Score\":2", stored.Payload);
+    }
+
     private SqliteEventStoreService CreateService(StatsEventBus bus, IOptions<EventStoreOptions> options) =>
         new(
             bus,
