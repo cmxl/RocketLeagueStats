@@ -5,6 +5,8 @@ import { PlayerCardComponent } from './player-card.component';
 import { TimeSinceGoalComponent } from './time-since-goal.component';
 import { GoalOverlayComponent } from './goal-overlay.component';
 import { LiveMatchStore } from '../../core/state/live-match.store';
+import { PlayerRef } from '../../core/models/player';
+import { PlayerStatsRow } from '../../core/models/player-stats';
 
 @Component({
   selector: 'rls-live-view',
@@ -55,11 +57,43 @@ import { LiveMatchStore } from '../../core/state/live-match.store';
 export class LiveViewComponent {
   private readonly live = inject(LiveMatchStore);
 
-  protected readonly bluePlayers = computed(() =>
-    this.live.playerStats().filter(p => p.player.team === 'blue'),
-  );
+  // Render the full team roster from the match header (populated by the first MatchStateSnapshot
+  // tick), matching each entry to its tally row from `playerStats`. Players who haven't yet
+  // generated a goal/statfeed get an all-zero placeholder row so their card still appears with
+  // their name and platform — instead of waiting for them to do something visible. Falls back to
+  // the lazy `playerStats` list during the brief MatchInitialized → first-snapshot window.
+  protected readonly bluePlayers = computed(() => this.combineRoster('blue'));
+  protected readonly orangePlayers = computed(() => this.combineRoster('orange'));
 
-  protected readonly orangePlayers = computed(() =>
-    this.live.playerStats().filter(p => p.player.team === 'orange'),
-  );
+  private combineRoster(team: 'blue' | 'orange'): PlayerStatsRow[] {
+    const stats = this.live.playerStats();
+    const roster = team === 'blue'
+      ? this.live.currentMatch()?.bluePlayers
+      : this.live.currentMatch()?.orangePlayers;
+
+    if (!roster || roster.length === 0) {
+      return stats.filter(p => p.player.team === team);
+    }
+
+    return roster.map(p => stats.find(s => s.player.shortcut === p.shortcut) ?? emptyRow(p));
+  }
+}
+
+function emptyRow(player: PlayerRef): PlayerStatsRow {
+  return {
+    player,
+    goals: 0,
+    assists: 0,
+    saves: 0,
+    epicSaves: 0,
+    shots: 0,
+    demosInflicted: 0,
+    demosTaken: 0,
+    crossbarHits: 0,
+    fastestGoalSpeedUuPerSec: 0,
+    mvpScore: 0,
+    isMvp: false,
+    score: 0,
+    touches: 0,
+  };
 }

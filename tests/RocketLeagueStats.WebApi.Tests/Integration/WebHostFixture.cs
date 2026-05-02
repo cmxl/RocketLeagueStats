@@ -3,6 +3,7 @@ namespace RocketLeagueStats.WebApi.Tests.Integration;
 using System.Linq;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -10,16 +11,22 @@ using RocketLeagueStats.Core.Bus;
 
 public sealed class WebHostFixture : WebApplicationFactory<Program>
 {
+    private readonly string dbPath = Path.Combine(
+        Path.GetTempPath(),
+        $"rls-test-stats-{Guid.NewGuid():N}.db");
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((ctx, config) =>
         {
-            // Override settings dir to a temp path so tests don't pollute %APPDATA%
-            var temp = Path.Combine(Path.GetTempPath(), $"rls-test-settings-{Guid.NewGuid()}");
-            Directory.CreateDirectory(temp);
+            var settingsTemp = Path.Combine(Path.GetTempPath(), $"rls-test-settings-{Guid.NewGuid()}");
+            Directory.CreateDirectory(settingsTemp);
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Web:SettingsDirectory"] = temp,
+                // Override settings dir so tests don't pollute %APPDATA%.
+                ["Web:SettingsDirectory"] = settingsTemp,
+                // Override stats DB path so tests don't read from / write to the user's real DB.
+                ["ConnectionStrings:Stats"] = $"Data Source={this.dbPath}",
             });
         });
 
@@ -43,4 +50,36 @@ public sealed class WebHostFixture : WebApplicationFactory<Program>
     }
 
     public StatsEventBus GetBus() => this.Services.GetRequiredService<StatsEventBus>();
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (!disposing)
+        {
+            return;
+        }
+
+        // Drop the SqliteConnection pool so the temp DB file isn't held open on Windows.
+        SqliteConnection.ClearAllPools();
+        TryDelete(this.dbPath);
+        TryDelete(this.dbPath + "-wal");
+        TryDelete(this.dbPath + "-shm");
+    }
+
+    private static void TryDelete(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // Best-effort: temp dir gets cleaned eventually.
+        }
+    }
 }

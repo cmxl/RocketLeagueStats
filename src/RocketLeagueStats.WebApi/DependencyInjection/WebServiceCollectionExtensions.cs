@@ -40,12 +40,21 @@ public static class WebServiceCollectionExtensions
 
         // Domain singletons
         services.AddSingleton<LiveMatchState>();
-        services.AddSingleton<IMatchHistoryIndex, MatchHistoryIndex>();
+        services.AddScoped<MatchHistoryReader>();
 
-        // SettingsStore — directory configurable via Web:SettingsDirectory (defaults to %APPDATA%/RocketLeagueStats)
-        var settingsDir = configuration["Web:SettingsDirectory"]
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RocketLeagueStats");
-        services.AddSingleton<ISettingsStore>(_ => new SettingsStore(settingsDir));
+        // SettingsStore — directory configurable via Web:SettingsDirectory; defaults to
+        // %APPDATA%/RocketLeagueStats. Resolved lazily inside the factory delegate (not at
+        // registration time) so WebApplicationFactory test overrides land before the directory
+        // is opened. Treat empty-string as missing so the appsettings.json placeholder
+        // ("SettingsDirectory": "") still hits the default branch.
+        services.AddSingleton<ISettingsStore>(_ =>
+        {
+            var configured = configuration["Web:SettingsDirectory"];
+            var dir = string.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RocketLeagueStats")
+                : configured;
+            return new SettingsStore(dir);
+        });
 
         // Hosted services that subscribe to the bus
         services.AddHostedService<LiveMatchProjector>();

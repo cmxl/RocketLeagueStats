@@ -2,6 +2,18 @@ import { PlayerRef } from './player';
 import { MatchType } from './enums';
 import { Goal } from './goal';
 
+/**
+ * Team metadata extracted from the first MatchStateSnapshot of a match. Color values are
+ * 6-digit hex without a leading `#` (e.g. `1873FF`) so the frontend can drop them straight
+ * into CSS variables. Named `TeamMeta` (not `Team`) to avoid colliding with the
+ * `Team` color-enum already exported from `./enums`.
+ */
+export interface TeamMeta {
+  name: string;
+  colorPrimary: string;
+  colorSecondary: string;
+}
+
 export interface MatchHeader {
   matchId: string;
   startedAt: string;
@@ -10,6 +22,11 @@ export interface MatchHeader {
   bluePlayers: PlayerRef[];
   orangePlayers: PlayerRef[];
   arenaName: string | null;
+  // Populated once the first MatchStateSnapshot of a match arrives. Null between MatchInitialized
+  // and the first snapshot tick — the live UI should fall back to the default blue/orange palette
+  // during that window.
+  blueTeam: TeamMeta | null;
+  orangeTeam: TeamMeta | null;
 }
 
 export interface MatchSummary {

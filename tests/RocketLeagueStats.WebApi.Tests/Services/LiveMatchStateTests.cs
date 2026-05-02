@@ -133,4 +133,108 @@ public sealed class LiveMatchStateTests
         var result = state.UpdateRoster([], []);
         Assert.Null(result);
     }
+
+    [Fact]
+    public void EnrichFromSnapshot_overwrites_roster_and_populates_team_metadata_and_arena()
+    {
+        var state = new LiveMatchState();
+        state.BeginMatch(SampleHeader());
+        state.AppendGoal(SampleGoal("blue"));
+        Assert.Equal(1, state.BlueScore);
+        Assert.Null(state.CurrentMatch!.BlueTeam);
+
+        var blue = new[]
+        {
+            new PlayerRefDto("cmxl", 5, "blue", "Steam"),
+            new PlayerRefDto("BoogerEater120", 6, "blue", "Epic"),
+        };
+        var orange = new[] { new PlayerRefDto("B4D_Morais", 1, "orange", "PS4") };
+
+        var enriched = state.EnrichFromSnapshot(
+            bluePlayers: blue,
+            orangePlayers: orange,
+            blueTeam: new TeamDto("Blue", "1873FF", "E5E5E5"),
+            orangeTeam: new TeamDto("Orange", "C26418", "E5E5E5"),
+            arenaName: "street_p");
+
+        Assert.NotNull(enriched);
+        Assert.Equal(2, enriched!.BluePlayers.Length);
+        Assert.Equal("Steam", enriched.BluePlayers[0].Platform);
+        Assert.Equal("PS4", enriched.OrangePlayers[0].Platform);
+        Assert.NotNull(enriched.BlueTeam);
+        Assert.Equal("Blue", enriched.BlueTeam!.Name);
+        Assert.Equal("1873FF", enriched.BlueTeam.ColorPrimary);
+        Assert.NotNull(enriched.OrangeTeam);
+        Assert.Equal("C26418", enriched.OrangeTeam!.ColorPrimary);
+        Assert.Equal("street_p", enriched.ArenaName);
+        // Scores preserved.
+        Assert.Equal(1, state.BlueScore);
+    }
+
+    [Fact]
+    public void EnrichFromSnapshot_returns_null_when_no_match_active()
+    {
+        var state = new LiveMatchState();
+        var result = state.EnrichFromSnapshot([], [], null, null, null);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void Snapshot_player_overrides_replace_event_derived_counters_in_CurrentPlayerStats()
+    {
+        // Without overrides: Goals/Saves/etc. come from PlayerTallyAggregator (event-derived).
+        // With overrides: snapshot Goals/Assists/Saves/Shots/Score/Touches win for matching
+        // shortcuts; EpicSaves/demos/crossbar/fastest-goal stay event-derived (snapshot doesn't
+        // carry those).
+        var state = new LiveMatchState();
+        state.BeginMatch(SampleHeader());
+        state.AppendGoal(SampleGoal("blue"));   // event path: Blue1 has 1 goal, 1 shot
+
+        var beforeOverride = state.CurrentPlayerStats().Single(r => r.Player.Name == "Blue1");
+        Assert.Equal(1, beforeOverride.Goals);
+        Assert.Equal(0, beforeOverride.Score);
+        Assert.Equal(0, beforeOverride.Touches);
+
+        var snap = new RocketLeagueStats.Core.Events.SnapshotPlayer(
+            Name: "Blue1",
+            PrimaryId: "Steam|123|0",
+            Platform: "Steam",
+            Shortcut: 1,
+            TeamNum: 0,
+            Score: 540,
+            Goals: 3,        // wire says 3 goals despite our 1 event-derived
+            Assists: 1,
+            Saves: 4,
+            Shots: 7,
+            Touches: 28);
+        state.SetSnapshotPlayerOverrides(new Dictionary<int, RocketLeagueStats.Core.Events.SnapshotPlayer>
+        {
+            [1] = snap,
+        });
+
+        var afterOverride = state.CurrentPlayerStats().Single(r => r.Player.Name == "Blue1");
+        Assert.Equal(3, afterOverride.Goals);
+        Assert.Equal(1, afterOverride.Assists);
+        Assert.Equal(4, afterOverride.Saves);
+        Assert.Equal(7, afterOverride.Shots);
+        Assert.Equal(540, afterOverride.Score);
+        Assert.Equal(28, afterOverride.Touches);
+    }
+
+    [Fact]
+    public void BeginMatch_clears_snapshot_player_overrides()
+    {
+        var state = new LiveMatchState();
+        state.BeginMatch(SampleHeader());
+        state.SetSnapshotPlayerOverrides(new Dictionary<int, RocketLeagueStats.Core.Events.SnapshotPlayer>
+        {
+            [1] = new("Blue1", "Steam|1|0", "Steam", 1, 0, 100, 1, 0, 0, 1, 5),
+        });
+
+        // Start a fresh match — overrides from the prior match should not leak in.
+        state.BeginMatch(SampleHeader());
+        var rows = state.CurrentPlayerStats();
+        Assert.All(rows, r => Assert.Equal(0, r.Score));
+        Assert.All(rows, r => Assert.Equal(0, r.Touches));
+    }
 }

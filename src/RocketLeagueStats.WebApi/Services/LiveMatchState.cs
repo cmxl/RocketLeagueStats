@@ -1,6 +1,7 @@
 namespace RocketLeagueStats.WebApi.Services;
 
 using System.Threading;
+using RocketLeagueStats.Core.Events;
 using RocketLeagueStats.WebApi.Contracts;
 using RocketLeagueStats.WebApi.Services.Recap;
 
@@ -21,6 +22,12 @@ internal sealed class LiveMatchState
     private DateTime? lastEventAt;
     private readonly List<GoalDto> goals = [];
     private readonly List<StatfeedDto> statfeeds = [];
+
+    // Snapshot-derived per-player overrides keyed by Shortcut. Populated on every MatchStateSnapshot
+    // tick (~30Hz) and merged into CurrentPlayerStats so the live UI shows wire-authoritative
+    // Goals/Assists/Saves/Shots/Score/Touches instead of the event-derived approximations. Cleared
+    // on BeginMatch.
+    private Dictionary<int, SnapshotPlayer>? snapshotPlayerOverrides;
 
     public MatchPhase Phase => this.activeMatch is null ? MatchPhase.Idle : MatchPhase.Live;
 
@@ -44,7 +51,33 @@ internal sealed class LiveMatchState
         }
 
         PlayerRefDto[] allPlayers = [.. this.activeMatch.BluePlayers, .. this.activeMatch.OrangePlayers];
-        return PlayerTallyAggregator.Aggregate(allPlayers, this.goals, this.statfeeds, markMvp: false);
+        var rows = PlayerTallyAggregator.Aggregate(allPlayers, this.goals, this.statfeeds, markMvp: false);
+
+        if (this.snapshotPlayerOverrides is null || this.snapshotPlayerOverrides.Count == 0)
+        {
+            return rows;
+        }
+
+        // Wire snapshot is authoritative for Goals/Assists/Saves/Shots/Score/Touches; the other
+        // fields (EpicSaves, demos, crossbar hits, fastest goal) stay event-derived because the
+        // snapshot doesn't carry them.
+        for (var i = 0; i < rows.Length; i++)
+        {
+            if (this.snapshotPlayerOverrides.TryGetValue(rows[i].Player.Shortcut, out var snap))
+            {
+                rows[i] = rows[i] with
+                {
+                    Goals = snap.Goals,
+                    Assists = snap.Assists,
+                    Saves = snap.Saves,
+                    Shots = snap.Shots,
+                    Score = snap.Score,
+                    Touches = snap.Touches,
+                };
+            }
+        }
+
+        return rows;
     }
 
     public void BeginMatch(MatchHeaderDto header)
@@ -58,6 +91,20 @@ internal sealed class LiveMatchState
             this.lastGoalTimestamp = null;
             this.goals.Clear();
             this.statfeeds.Clear();
+            this.snapshotPlayerOverrides = null;
+        }
+    }
+
+    /// <summary>
+    /// Stores the latest snapshot's per-player wire stats so <see cref="CurrentPlayerStats"/> can
+    /// override the event-derived counters on the next read. Pass null to clear (e.g., when snapshot
+    /// data is unavailable mid-match).
+    /// </summary>
+    public void SetSnapshotPlayerOverrides(Dictionary<int, SnapshotPlayer>? overrides)
+    {
+        lock (this.syncLock)
+        {
+            this.snapshotPlayerOverrides = overrides;
         }
     }
 
@@ -79,6 +126,38 @@ internal sealed class LiveMatchState
             {
                 BluePlayers = bluePlayers,
                 OrangePlayers = orangePlayers,
+            };
+            return this.activeMatch;
+        }
+    }
+
+    /// <summary>
+    /// Enriches the current match's header with full roster + team metadata + arena from the first
+    /// MatchStateSnapshot tick. Returns the updated header so the projector can broadcast it, or
+    /// null if no match is active. Existing roster entries are replaced (snapshot is authoritative);
+    /// scores and event feeds are preserved.
+    /// </summary>
+    public MatchHeaderDto? EnrichFromSnapshot(
+        PlayerRefDto[] bluePlayers,
+        PlayerRefDto[] orangePlayers,
+        TeamDto? blueTeam,
+        TeamDto? orangeTeam,
+        string? arenaName)
+    {
+        lock (this.syncLock)
+        {
+            if (this.activeMatch is null)
+            {
+                return null;
+            }
+
+            this.activeMatch = this.activeMatch with
+            {
+                BluePlayers = bluePlayers,
+                OrangePlayers = orangePlayers,
+                BlueTeam = blueTeam,
+                OrangeTeam = orangeTeam,
+                ArenaName = arenaName ?? this.activeMatch.ArenaName,
             };
             return this.activeMatch;
         }
