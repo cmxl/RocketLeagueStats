@@ -41,7 +41,8 @@ import { EventTimelineComponent } from './event-timeline.component';
         } @placeholder {
           <div class="charts-placeholder">Charts loading…</div>
         }
-        <rls-player-stats-table [rows]="r.playerStats" />
+        <rls-player-stats-table [rows]="r.playerStats" category="offense" />
+        <rls-player-stats-table [rows]="r.playerStats" category="defense" />
         <rls-speed-leaderboard [recap]="r" />
         @defer (on viewport) {
           <rls-event-timeline [recap]="r" />
