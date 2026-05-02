@@ -148,6 +148,73 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task ServiceSurvivesSustainedBurst_NoEventsLost()
+    {
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 5, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await service.StartAsync(cts.Token);
+
+        await Task.Delay(100, cts.Token);
+
+        const int total = 50;
+        for (var i = 0; i < total; i++)
+        {
+            bus.Publish(new GoalScoredEvent
+            {
+                EventName = KnownEvents.GoalScored,
+                Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(1 + i),
+                MatchGuid = "burst",
+                Scorer = new PlayerRef("Tobi", 1, 0),
+                ImpactLocation = default,
+            });
+        }
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.Events.CountAsync(), expected: total, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.False(service.ExecuteTask?.IsFaulted ?? false);
+
+        await using var ctx = this.fixture.CreateDbContext();
+        Assert.Equal(total, await ctx.Events.CountAsync());
+    }
+
+    [Fact]
+    public async Task Idempotency_ReplayingSameLogicalEventsIsSafe()
+    {
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 4, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+
+        await Task.Delay(100, cts.Token);
+
+        for (var i = 0; i < 3; i++)
+        {
+            bus.Publish(new GoalScoredEvent
+            {
+                EventName = KnownEvents.GoalScored,
+                Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(1 + i),
+                MatchGuid = "idempotent",
+                Scorer = new PlayerRef("Tobi", 1, 0),
+                ImpactLocation = default,
+            });
+        }
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.Events.CountAsync(), expected: 3, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+
+        // Each event has its own auto-incremented Id so participant PKs (EventId, PlayerName, Role) never collide.
+        await using var ctx = this.fixture.CreateDbContext();
+        Assert.Equal(3, await ctx.Events.CountAsync());
+        Assert.Equal(3, await ctx.EventParticipants.CountAsync(p => p.PlayerName == "Tobi" && p.Role == ParticipantRoles.Scorer));
+    }
+
+    [Fact]
     public async Task Batching_FlushesAtMaxBatchSize()
     {
         using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
