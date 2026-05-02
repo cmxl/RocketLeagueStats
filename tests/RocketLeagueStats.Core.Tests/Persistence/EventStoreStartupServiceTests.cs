@@ -1,5 +1,6 @@
 namespace RocketLeagueStats.Core.Tests.Persistence;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using RocketLeagueStats.Core.HostedServices;
@@ -25,13 +26,30 @@ public sealed class EventStoreStartupServiceTests : IAsyncLifetime, IDisposable
         // which causes the log call to be short-circuited. Enable all levels so Log is reached.
         logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
 
+        // Build a scope factory that dispenses the real StatsDbContext from the fixture.
+        var dbContext = this.fixture.CreateDbContext();
+        var serviceProvider = Substitute.For<IServiceProvider>();
+        serviceProvider.GetService(typeof(StatsDbContext)).Returns(dbContext);
+
+        var scope = Substitute.For<IServiceScope>();
+        scope.ServiceProvider.Returns(serviceProvider);
+
+        var asyncScope = Substitute.For<IAsyncDisposable>();
+
+        // IServiceScopeFactory.CreateAsyncScope() is an extension method that delegates to
+        // CreateScope(); stub the underlying interface method so the extension resolves correctly.
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        scopeFactory.CreateScope().Returns(scope);
+
         var service = new EventStoreStartupService(
             new EventStoreConnectionString(this.fixture.ConnectionString),
-            this.fixture.CreateDbContext(),
+            scopeFactory,
             logger);
 
         await service.StartAsync(CancellationToken.None);
         await service.StopAsync(CancellationToken.None);
+
+        dbContext.Dispose();
 
         Assert.True(File.Exists(this.fixture.FilePath), "DB file should exist after migration.");
 

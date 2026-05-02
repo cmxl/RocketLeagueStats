@@ -2,13 +2,14 @@ namespace RocketLeagueStats.Core.HostedServices;
 
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RocketLeagueStats.Core.Persistence;
 
 internal sealed class EventStoreStartupService(
     EventStoreConnectionString connectionString,
-    StatsDbContext dbContext,
+    IServiceScopeFactory scopeFactory,
     ILogger<EventStoreStartupService> logger)
     : IHostedService
 {
@@ -20,6 +21,11 @@ internal sealed class EventStoreStartupService(
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // DbContext is scoped; resolve it through a dedicated scope so the singleton hosted
+        // service does not violate the captive-dependency rule.
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<StatsDbContext>();
+
         // MigrateAsync opens its own internal SqliteConnection, applies pending migrations, and
         // closes. The SqliteEventStoreService later opens its own short-lived connections per batch
         // — the two never share a connection object. In WAL mode that's fine: SQLite handles
