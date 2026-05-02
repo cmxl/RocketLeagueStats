@@ -50,6 +50,9 @@ import { KmhPipe } from '../../shared/pipes/kmh.pipe';
     </div>
   `,
   styles: [`
+    /* Span the full recap-grid row — same pattern as the event timeline — so the 10-column
+       table never has to compete for horizontal space with adjacent grid items. */
+    :host { grid-column: 1 / -1; }
     .table-wrapper { padding: 1rem 1.5rem; overflow-x: auto; }
     .table-title { font-family: var(--font-header); font-size: var(--text-base); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 0.75rem; }
     .stats-table { width: 100%; border-collapse: collapse; font-family: var(--font-body); font-size: var(--text-sm); }
