@@ -182,6 +182,96 @@ internal sealed class SqliteEventStoreService(
         var spTimestamp = insertSnapshot.Parameters.Add("$ts", SqliteType.Integer);
         var spPayload = insertSnapshot.Parameters.Add("$payload", SqliteType.Text);
 
+        await using var upsertMatch = connection.CreateCommand();
+        upsertMatch.Transaction = tx;
+        // SQLite UPSERT (ON CONFLICT … DO UPDATE) — `excluded.<col>` is the would-be-inserted value
+        // for that column on a conflict. EF Core has no first-class UPSERT API, so we do this in raw
+        // SQL rather than load + change-track + save (which would issue SELECT + INSERT/UPDATE for
+        // every match in every batch).
+        // - EventCount/SnapshotCount: ADD the per-batch delta to the existing total.
+        // - LastEventAtUtc: take the larger of existing vs new — events within a batch may not be
+        //   in arrival order if multiple subscribers race.
+        // - Lifecycle timestamps + WinnerTeamNum: COALESCE keeps the FIRST non-null value seen.
+        //   This means if MatchEnded fires twice (which it shouldn't), the original WinnerTeamNum wins.
+        upsertMatch.CommandText = """
+            INSERT INTO Matches (MatchGuid, FirstSeenAtUtc, EventCount, SnapshotCount, LastEventAtUtc,
+                                  CreatedAtUtc, InitializedAtUtc, EndedAtUtc, DestroyedAtUtc, WinnerTeamNum)
+            VALUES ($matchGuid, $firstSeen, $eventDelta, $snapshotDelta, $lastTs,
+                    $created, $initialized, $ended, $destroyed, $winner)
+            ON CONFLICT(MatchGuid) DO UPDATE SET
+                EventCount     = EventCount + excluded.EventCount,
+                SnapshotCount  = SnapshotCount + excluded.SnapshotCount,
+                LastEventAtUtc = MAX(LastEventAtUtc, excluded.LastEventAtUtc),
+                CreatedAtUtc     = COALESCE(CreatedAtUtc,     excluded.CreatedAtUtc),
+                InitializedAtUtc = COALESCE(InitializedAtUtc, excluded.InitializedAtUtc),
+                EndedAtUtc       = COALESCE(EndedAtUtc,       excluded.EndedAtUtc),
+                DestroyedAtUtc   = COALESCE(DestroyedAtUtc,   excluded.DestroyedAtUtc),
+                WinnerTeamNum    = COALESCE(WinnerTeamNum,    excluded.WinnerTeamNum);
+            """;
+        var umMatchGuid = upsertMatch.Parameters.Add("$matchGuid", SqliteType.Text);
+        var umFirstSeen = upsertMatch.Parameters.Add("$firstSeen", SqliteType.Integer);
+        var umEventDelta = upsertMatch.Parameters.Add("$eventDelta", SqliteType.Integer);
+        var umSnapshotDelta = upsertMatch.Parameters.Add("$snapshotDelta", SqliteType.Integer);
+        var umLastTs = upsertMatch.Parameters.Add("$lastTs", SqliteType.Integer);
+        var umCreated = upsertMatch.Parameters.Add("$created", SqliteType.Integer);
+        var umInitialized = upsertMatch.Parameters.Add("$initialized", SqliteType.Integer);
+        var umEnded = upsertMatch.Parameters.Add("$ended", SqliteType.Integer);
+        var umDestroyed = upsertMatch.Parameters.Add("$destroyed", SqliteType.Integer);
+        var umWinner = upsertMatch.Parameters.Add("$winner", SqliteType.Integer);
+
+        var matchAggregates = new Dictionary<string, MatchAggregate>(StringComparer.Ordinal);
+        foreach (var evt in batch)
+        {
+            if (evt.MatchGuid is null)
+            {
+                continue;
+            }
+
+            var ts = (evt.Timestamp ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
+            if (!matchAggregates.TryGetValue(evt.MatchGuid, out var agg))
+            {
+                agg = new MatchAggregate(ts);
+            }
+
+            if (evt is MatchStateSnapshot)
+            {
+                agg = agg with { SnapshotDelta = agg.SnapshotDelta + 1, LastTs = Math.Max(agg.LastTs, ts) };
+            }
+            else
+            {
+                agg = agg with { EventDelta = agg.EventDelta + 1, LastTs = Math.Max(agg.LastTs, ts) };
+            }
+
+            agg = evt switch
+            {
+                MatchCreatedEvent => agg with { Created = agg.Created ?? ts },
+                MatchInitializedEvent => agg with { Initialized = agg.Initialized ?? ts },
+                MatchEndedEvent end => agg with { Ended = agg.Ended ?? ts, Winner = agg.Winner ?? end.WinnerTeamNum },
+                MatchDestroyedEvent => agg with { Destroyed = agg.Destroyed ?? ts },
+                _ => agg,
+            };
+
+            matchAggregates[evt.MatchGuid] = agg;
+        }
+
+        // Upsert all Matches BEFORE the per-event/snapshot inserts below — Events.MatchGuid and
+        // MatchSnapshots.MatchGuid are FKs to Matches.MatchGuid with foreign_keys=ON. Without this
+        // ordering, the first event of a brand-new match would fail with FOREIGN KEY constraint failed.
+        foreach (var (guid, agg) in matchAggregates)
+        {
+            umMatchGuid.Value = guid;
+            umFirstSeen.Value = agg.FirstSeen;
+            umEventDelta.Value = agg.EventDelta;
+            umSnapshotDelta.Value = agg.SnapshotDelta;
+            umLastTs.Value = agg.LastTs;
+            umCreated.Value = (object?)agg.Created ?? DBNull.Value;
+            umInitialized.Value = (object?)agg.Initialized ?? DBNull.Value;
+            umEnded.Value = (object?)agg.Ended ?? DBNull.Value;
+            umDestroyed.Value = (object?)agg.Destroyed ?? DBNull.Value;
+            umWinner.Value = (object?)agg.Winner ?? DBNull.Value;
+            await upsertMatch.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         foreach (var evt in batch)
         {
             var ts = (evt.Timestamp ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
@@ -252,4 +342,15 @@ internal sealed class SqliteEventStoreService(
             """;
         cmd.ExecuteNonQuery();
     }
+
+    private readonly record struct MatchAggregate(
+        long FirstSeen,
+        long LastTs = 0,
+        long EventDelta = 0,
+        long SnapshotDelta = 0,
+        long? Created = null,
+        long? Initialized = null,
+        long? Ended = null,
+        long? Destroyed = null,
+        int? Winner = null);
 }

@@ -8,7 +8,6 @@ using RocketLeagueStats.Core.Configuration;
 using RocketLeagueStats.Core.Events;
 using RocketLeagueStats.Core.HostedServices;
 using RocketLeagueStats.Core.Persistence;
-using RocketLeagueStats.Core.Persistence.Entities;
 
 public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
 {
@@ -23,19 +22,6 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
     [Fact]
     public async Task WritesGoalScored_PersistsEventAndParticipants()
     {
-        // The Events.MatchGuid FK is nullable but non-null values must reference an existing Match
-        // row when foreign_keys=ON is set on the raw ADO.NET connection. Seed the parent row so the
-        // insert path succeeds without disabling FK enforcement.
-        await using (var seedCtx = this.fixture.CreateDbContext())
-        {
-            seedCtx.Matches.Add(new Match
-            {
-                MatchGuid = "match-1",
-                FirstSeenAtUtc = DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds(),
-            });
-            await seedCtx.SaveChangesAsync();
-        }
-
         using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
         var options = Options.Create(new EventStoreOptions { MaxBatchSize = 4, MaxBatchLatencyMs = 50 });
         var service = this.CreateService(bus, options);
@@ -81,18 +67,6 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
     [Fact]
     public async Task WritesUpdateState_GoesToMatchSnapshotsTable()
     {
-        // Pre-seed Match row to satisfy the MatchSnapshots.MatchGuid FK; Task 14's upsert will make
-        // this implicit.
-        await using (var seedCtx = this.fixture.CreateDbContext())
-        {
-            seedCtx.Matches.Add(new Match
-            {
-                MatchGuid = "match-snap",
-                FirstSeenAtUtc = DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds(),
-            });
-            await seedCtx.SaveChangesAsync();
-        }
-
         using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
         var options = Options.Create(new EventStoreOptions { MaxBatchSize = 4, MaxBatchLatencyMs = 50 });
         var service = this.CreateService(bus, options);
@@ -124,6 +98,53 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
         var stored = await ctx.MatchSnapshots.SingleAsync();
         Assert.Equal("match-snap", stored.MatchGuid);
         Assert.Contains("\"Score\":2", stored.Payload);
+    }
+
+    [Fact]
+    public async Task MatchRow_UpsertedOnFirstEvent_EnrichedOnLifecycleEvents()
+    {
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 8, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+
+        // Subscription-timing: see WritesGoalScored_PersistsEventAndParticipants.
+        await Task.Delay(100, cts.Token);
+
+        bus.Publish(new MatchCreatedEvent
+        {
+            EventName = KnownEvents.MatchCreated,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(10),
+            MatchGuid = "lifecycle-1",
+        });
+        bus.Publish(new GoalScoredEvent
+        {
+            EventName = KnownEvents.GoalScored,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(50),
+            MatchGuid = "lifecycle-1",
+            Scorer = new PlayerRef("Tobi", 1, 0),
+            ImpactLocation = default,
+        });
+        bus.Publish(new MatchEndedEvent
+        {
+            EventName = KnownEvents.MatchEnded,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(120),
+            MatchGuid = "lifecycle-1",
+            WinnerTeamNum = 0,
+        });
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.Events.CountAsync(), expected: 3, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+
+        await using var ctx = this.fixture.CreateDbContext();
+        var match = await ctx.Matches.SingleAsync(m => m.MatchGuid == "lifecycle-1");
+        Assert.Equal(10_000L, match.CreatedAtUtc);            // ms
+        Assert.Equal(120_000L, match.EndedAtUtc);
+        Assert.Equal(0, match.WinnerTeamNum);
+        Assert.Equal(3, match.EventCount);
+        Assert.Equal(120_000L, match.LastEventAtUtc);
     }
 
     private SqliteEventStoreService CreateService(StatsEventBus bus, IOptions<EventStoreOptions> options) =>
