@@ -32,6 +32,19 @@ import { DurationPipe } from '../../shared/pipes/duration.pipe';
           <span class="scoreboard__team-label">{{ orangeLabel() }}</span>
         </div>
       </div>
+      @if (showPossession()) {
+        <div class="possession" [attr.aria-label]="'Ball possession ' + bluePossessionPct() + ' percent blue / ' + orangePossessionPct() + ' percent orange'">
+          <div class="possession__bar">
+            <div class="possession__fill possession__fill--blue" [style.width.%]="bluePossessionPct()"></div>
+            <div class="possession__fill possession__fill--orange" [style.width.%]="orangePossessionPct()"></div>
+          </div>
+          <div class="possession__labels">
+            <span class="possession__label possession__label--blue">{{ bluePossessionPct() }}%</span>
+            <span class="possession__caption">POSSESSION</span>
+            <span class="possession__label possession__label--orange">{{ orangePossessionPct() }}%</span>
+          </div>
+        </div>
+      }
     </div>
   `,
   styles: [`
@@ -67,6 +80,15 @@ import { DurationPipe } from '../../shared/pipes/duration.pipe';
     .scoreboard__team--orange .scoreboard__score { color: var(--team-orange); }
     .scoreboard__team-label { font-family: var(--font-header); font-size: var(--text-sm); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
     .scoreboard__divider { color: var(--text-muted); font-size: var(--text-2xl); }
+    .possession { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 0.25rem; }
+    .possession__bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--bg-overlay); }
+    .possession__fill { height: 100%; transition: width 250ms ease-out; }
+    .possession__fill--blue { background: var(--team-blue); }
+    .possession__fill--orange { background: var(--team-orange); }
+    .possession__labels { display: flex; justify-content: space-between; align-items: center; font-family: var(--font-header); font-size: var(--text-xs); }
+    .possession__label--blue { color: var(--team-blue); font-family: var(--font-display); font-size: var(--text-sm); }
+    .possession__label--orange { color: var(--team-orange); font-family: var(--font-display); font-size: var(--text-sm); }
+    .possession__caption { color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
   `],
 })
 export class ScoreboardHeaderComponent {
@@ -90,4 +112,24 @@ export class ScoreboardHeaderComponent {
 
   protected readonly orangeLabel = computed(() =>
     (this.live.currentMatch()?.orangeTeam?.name ?? 'ORANGE').toUpperCase());
+
+  // Possession is the share of total ball touches per team. Touches come from the wire's
+  // MatchStateSnapshot; until the first snapshot lands every player has 0 touches and the bar
+  // is hidden via `showPossession`. We round to whole percentages so blue% + orange% = 100
+  // (rounding the larger up; otherwise low-touch warm-up minutes flicker between 49/51 etc.).
+  private readonly blueTouches = computed(() =>
+    this.live.playerStats().filter(p => p.player.team === 'blue').reduce((acc, p) => acc + p.touches, 0));
+
+  private readonly orangeTouches = computed(() =>
+    this.live.playerStats().filter(p => p.player.team === 'orange').reduce((acc, p) => acc + p.touches, 0));
+
+  protected readonly showPossession = computed(() => this.blueTouches() + this.orangeTouches() > 0);
+
+  protected readonly bluePossessionPct = computed(() => {
+    const blue = this.blueTouches();
+    const total = blue + this.orangeTouches();
+    return total === 0 ? 0 : Math.round((blue * 100) / total);
+  });
+
+  protected readonly orangePossessionPct = computed(() => 100 - this.bluePossessionPct());
 }

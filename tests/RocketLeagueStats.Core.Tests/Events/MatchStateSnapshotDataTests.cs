@@ -14,7 +14,7 @@ public sealed class MatchStateSnapshotDataTests
         {
           "MatchGuid": "D22C143A11F146607ABA7DBDE3DA7507",
           "Players": [
-            {"Name":"cmxl","PrimaryId":"Steam|76561198050197413|0","Shortcut":5,"TeamNum":1},
+            {"Name":"cmxl","PrimaryId":"Steam|76561198050197413|0","Shortcut":5,"TeamNum":1,"Score":420,"Goals":2,"Assists":1,"Saves":3,"Shots":5,"Touches":42},
             {"Name":"BoogerEater120","PrimaryId":"Epic|1bf36107886043408524b982650e6cf7|0","Shortcut":6,"TeamNum":1},
             {"Name":"Dave","PrimaryId":"Switch|15371672872062723611|0","Shortcut":7,"TeamNum":1},
             {"Name":"B4D_Morais","PrimaryId":"PS4|5649432690749742010|0","Shortcut":1,"TeamNum":0},
@@ -44,6 +44,18 @@ public sealed class MatchStateSnapshotDataTests
         Assert.Equal("Steam", cmxl.Platform);
         Assert.Equal(5, cmxl.Shortcut);
         Assert.Equal(1, cmxl.TeamNum);
+        Assert.Equal(420, cmxl.Score);
+        Assert.Equal(2, cmxl.Goals);
+        Assert.Equal(1, cmxl.Assists);
+        Assert.Equal(3, cmxl.Saves);
+        Assert.Equal(5, cmxl.Shots);
+        Assert.Equal(42, cmxl.Touches);
+
+        // Players without Score/Goals/etc. in the wire payload default to 0 (training warm-up
+        // shape from the early ticks of a match before any stats accrue).
+        var dave = data.Players.Single(p => p.Name == "Dave");
+        Assert.Equal(0, dave.Score);
+        Assert.Equal(0, dave.Touches);
 
         Assert.Equal("Epic", data.Players.Single(p => p.Name == "BoogerEater120").Platform);
         Assert.Equal("Switch", data.Players.Single(p => p.Name == "Dave").Platform);

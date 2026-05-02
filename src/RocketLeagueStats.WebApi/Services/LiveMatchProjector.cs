@@ -246,18 +246,10 @@ internal sealed partial class LiveMatchProjector(
 
     private async Task HandleSnapshotAsync(MatchStateSnapshot snapshot)
     {
-        // Snapshot enrichment only applies once we have an active live match. Snapshots that arrive
+        // Snapshot processing only applies once we have an active live match. Snapshots that arrive
         // during the post-game podium screen (after MatchEnded/MatchDestroyed but before the next
         // MatchInitialized) are ignored.
         if (this.currentMatchId is null)
-        {
-            return;
-        }
-
-        // Snapshots fire at ~30Hz; the fields we care about (roster, team colors/names, arena) are
-        // stable for a match's duration. Enrich on the first snapshot only — subsequent ticks are
-        // a waste of bus → SignalR cycles.
-        if (this.enrichedFromSnapshot)
         {
             return;
         }
@@ -267,33 +259,48 @@ internal sealed partial class LiveMatchProjector(
             return;
         }
 
-        var (blueTeam, orangeTeam) = (FindTeam(data.Teams, teamNum: 0), FindTeam(data.Teams, teamNum: 1));
-        var bluePlayers = data.Players
-            .Where(p => p.TeamNum == 0)
-            .Select(SnapshotPlayerToDto)
-            .ToArray();
-        var orangePlayers = data.Players
-            .Where(p => p.TeamNum == 1)
-            .Select(SnapshotPlayerToDto)
-            .ToArray();
-
-        // Sync the lazy-discovery accumulator with the authoritative snapshot roster so any future
-        // discrete event from a player who somehow wasn't in the snapshot still triggers a roster
-        // update via MaybeUpdateRosterAsync.
-        this.seenPlayers.Clear();
-        foreach (var p in bluePlayers.Concat(orangePlayers))
+        // Per-tick: refresh the snapshot-derived per-player stat overrides so the next
+        // OnPlayerStatsTick broadcast carries wire-authoritative Goals/Assists/Saves/Shots/Score/
+        // Touches. Cheap dictionary build; broadcast itself is deduped via PlayerStatsEqual.
+        var snapshotOverrides = new Dictionary<int, SnapshotPlayer>(data.Players.Count);
+        foreach (var p in data.Players)
         {
-            this.seenPlayers[p.Shortcut] = p;
+            snapshotOverrides[p.Shortcut] = p;
         }
 
-        var enriched = state.EnrichFromSnapshot(bluePlayers, orangePlayers, blueTeam, orangeTeam, data.Arena);
-        if (enriched is null)
+        state.SetSnapshotPlayerOverrides(snapshotOverrides);
+
+        // First-tick-only: enrich the header with roster + team colors + arena. These fields are
+        // stable for a match's duration so re-broadcasting OnRosterUpdated at 30Hz would be waste.
+        if (!this.enrichedFromSnapshot)
         {
-            return;
+            var (blueTeam, orangeTeam) = (FindTeam(data.Teams, teamNum: 0), FindTeam(data.Teams, teamNum: 1));
+            var bluePlayers = data.Players
+                .Where(p => p.TeamNum == 0)
+                .Select(SnapshotPlayerToDto)
+                .ToArray();
+            var orangePlayers = data.Players
+                .Where(p => p.TeamNum == 1)
+                .Select(SnapshotPlayerToDto)
+                .ToArray();
+
+            // Sync the lazy-discovery accumulator with the authoritative snapshot roster so any
+            // future discrete event from a player who somehow wasn't in the snapshot still triggers
+            // a roster update via MaybeUpdateRosterAsync.
+            this.seenPlayers.Clear();
+            foreach (var p in bluePlayers.Concat(orangePlayers))
+            {
+                this.seenPlayers[p.Shortcut] = p;
+            }
+
+            var enriched = state.EnrichFromSnapshot(bluePlayers, orangePlayers, blueTeam, orangeTeam, data.Arena);
+            if (enriched is not null)
+            {
+                this.enrichedFromSnapshot = true;
+                await hub.Clients.All.OnRosterUpdated(enriched);
+            }
         }
 
-        this.enrichedFromSnapshot = true;
-        await hub.Clients.All.OnRosterUpdated(enriched);
         await this.MaybeBroadcastPlayerStatsAsync();
     }
 

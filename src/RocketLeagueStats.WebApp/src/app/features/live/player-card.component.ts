@@ -19,6 +19,9 @@ import { SettingsStore } from '../../core/state/settings.store';
           @if (platform()) {
             <span class="player-card__platform">{{ platform() }}</span>
           }
+          @if (player().score > 0) {
+            <span class="player-card__score">{{ player().score }}</span>
+          }
         </div>
         <dl class="stats">
           <div class="stat"><dt>G</dt><dd>{{ player().goals }}</dd></div>
@@ -37,6 +40,7 @@ import { SettingsStore } from '../../core/state/settings.store';
     .player-card__name--you { color: var(--accent-mvp); }
     .player-card__you { font-size: var(--text-xs); background: var(--accent-mvp); color: var(--bg-base); padding: 0.1rem 0.35rem; border-radius: 2px; font-weight: 700; }
     .player-card__platform { font-family: var(--font-header); font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 0.1rem 0.35rem; border: 1px solid color-mix(in srgb, var(--text-muted) 60%, transparent); border-radius: 2px; }
+    .player-card__score { margin-left: auto; font-family: var(--font-display); font-size: var(--text-lg); color: var(--accent-mvp); }
     .stats { display: flex; gap: 0.75rem; margin: 0; padding: 0; }
     .stat { display: flex; flex-direction: column; align-items: center; }
     .stat dt { font-family: var(--font-header); font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; }

@@ -50,20 +50,29 @@ public sealed record MatchStateSnapshotData(
                 continue;
             }
 
-            var name = p.TryGetProperty("Name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String
-                ? nameEl.GetString() ?? string.Empty
-                : string.Empty;
-            var primaryId = p.TryGetProperty("PrimaryId", out var pidEl) && pidEl.ValueKind == JsonValueKind.String
-                ? pidEl.GetString() ?? string.Empty
-                : string.Empty;
-            var shortcut = p.TryGetProperty("Shortcut", out var scEl) && scEl.ValueKind == JsonValueKind.Number
-                ? scEl.GetInt32()
-                : 0;
-            var teamNum = p.TryGetProperty("TeamNum", out var tnEl) && tnEl.ValueKind == JsonValueKind.Number
-                ? tnEl.GetInt32()
-                : 0;
+            var name = ReadString(p, "Name");
+            var primaryId = ReadString(p, "PrimaryId");
+            var shortcut = ReadInt(p, "Shortcut");
+            var teamNum = ReadInt(p, "TeamNum");
+            var score = ReadInt(p, "Score");
+            var goals = ReadInt(p, "Goals");
+            var assists = ReadInt(p, "Assists");
+            var saves = ReadInt(p, "Saves");
+            var shots = ReadInt(p, "Shots");
+            var touches = ReadInt(p, "Touches");
 
-            list.Add(new SnapshotPlayer(name, primaryId, ExtractPlatform(primaryId), shortcut, teamNum));
+            list.Add(new SnapshotPlayer(
+                name,
+                primaryId,
+                ExtractPlatform(primaryId),
+                shortcut,
+                teamNum,
+                score,
+                goals,
+                assists,
+                saves,
+                shots,
+                touches));
         }
 
         return list;
@@ -121,18 +130,37 @@ public sealed record MatchStateSnapshotData(
         var pipe = primaryId.IndexOf('|', System.StringComparison.Ordinal);
         return pipe <= 0 ? string.Empty : primaryId[..pipe];
     }
+
+    private static string ReadString(JsonElement obj, string property) =>
+        obj.TryGetProperty(property, out var el) && el.ValueKind == JsonValueKind.String
+            ? el.GetString() ?? string.Empty
+            : string.Empty;
+
+    private static int ReadInt(JsonElement obj, string property) =>
+        obj.TryGetProperty(property, out var el) && el.ValueKind == JsonValueKind.Number
+            ? el.GetInt32()
+            : 0;
 }
 
 /// <summary>
 /// One entry in <see cref="MatchStateSnapshotData.Players"/>. <see cref="Platform"/> is derived
-/// from the leading segment of <see cref="PrimaryId"/> (Steam/Epic/Switch/PS4/XboxOne/...).
+/// from the leading segment of <see cref="PrimaryId"/> (Steam/Epic/Switch/PS4/XboxOne/...). The
+/// numeric fields are the wire's authoritative tallies — preferred over event-derived counts
+/// because RL itself is the source of truth and saves/shots in particular don't always have a
+/// corresponding statfeed entry.
 /// </summary>
 public sealed record SnapshotPlayer(
     string Name,
     string PrimaryId,
     string Platform,
     int Shortcut,
-    int TeamNum);
+    int TeamNum,
+    int Score,
+    int Goals,
+    int Assists,
+    int Saves,
+    int Shots,
+    int Touches);
 
 /// <summary>
 /// One entry in <see cref="MatchStateSnapshotData.Teams"/>. Color values are 6-digit hex without

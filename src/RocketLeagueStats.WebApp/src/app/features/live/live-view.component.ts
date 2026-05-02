@@ -93,5 +93,7 @@ function emptyRow(player: PlayerRef): PlayerStatsRow {
     fastestGoalSpeedUuPerSec: 0,
     mvpScore: 0,
     isMvp: false,
+    score: 0,
+    touches: 0,
   };
 }
