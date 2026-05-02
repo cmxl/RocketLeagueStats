@@ -147,6 +147,43 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
         Assert.Equal(120_000L, match.LastEventAtUtc);
     }
 
+    [Fact]
+    public async Task WritesBallHit_PersistsAllPlayersAsParticipants()
+    {
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 4, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+
+        await Task.Delay(100, cts.Token);
+
+        var hit = new BallHitEvent
+        {
+            EventName = KnownEvents.BallHit,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(7),
+            MatchGuid = "match-bh",
+            Players =
+            [
+                new PlayerRef("Tobi", 1, 0),
+                new PlayerRef("Jay", 2, 0),
+                new PlayerRef("Vex", 3, 1),
+            ],
+            Ball = default,
+        };
+
+        bus.Publish(hit);
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.EventParticipants.CountAsync(), expected: 3, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+
+        await using var ctx = this.fixture.CreateDbContext();
+        var participants = await ctx.EventParticipants.OrderBy(p => p.PlayerName).ToListAsync();
+        Assert.Equal(["Jay", "Tobi", "Vex"], participants.Select(p => p.PlayerName));
+        Assert.All(participants, p => Assert.Equal(ParticipantRoles.BallHit, p.Role));
+    }
+
     private SqliteEventStoreService CreateService(StatsEventBus bus, IOptions<EventStoreOptions> options) =>
         new(
             bus,
