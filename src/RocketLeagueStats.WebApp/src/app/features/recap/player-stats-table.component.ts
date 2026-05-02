@@ -2,8 +2,6 @@ import { Component, ChangeDetectionStrategy, input, computed } from '@angular/co
 import { PlayerStatsRow } from '../../core/models/player-stats';
 import { KmhPipe } from '../../shared/pipes/kmh.pipe';
 
-export type PlayerStatsCategory = 'offense' | 'defense';
-
 @Component({
   selector: 'rls-player-stats-table',
   standalone: true,
@@ -11,23 +9,20 @@ export type PlayerStatsCategory = 'offense' | 'defense';
   imports: [KmhPipe],
   template: `
     <div class="table-wrapper">
-      <h3 class="table-title">{{ title() }}</h3>
+      <h3 class="table-title">Player Stats</h3>
       <table class="stats-table">
         <thead>
           <tr>
             <th>Player</th>
-            @if (category() === 'offense') {
-              <th>G</th>
-              <th>A</th>
-              <th>Sh</th>
-              <th>Best Speed</th>
-              <th>Score</th>
-            } @else {
-              <th>Sv</th>
-              <th>ESv</th>
-              <th>D</th>
-              <th>DT</th>
-            }
+            <th>G</th>
+            <th>A</th>
+            <th>Sv</th>
+            <th>Sh</th>
+            <th>ESv</th>
+            <th>D</th>
+            <th>DT</th>
+            <th>Best Speed</th>
+            <th>Score</th>
           </tr>
         </thead>
         <tbody>
@@ -37,20 +32,17 @@ export type PlayerStatsCategory = 'offense' | 'defense';
                 [class.row--mvp]="row.isMvp">
               <td class="player-cell">
                 {{ row.player.name }}
-                @if (row.isMvp && category() === 'offense') { <span class="mvp-badge">MVP</span> }
+                @if (row.isMvp) { <span class="mvp-badge">MVP</span> }
               </td>
-              @if (category() === 'offense') {
-                <td>{{ row.goals }}</td>
-                <td>{{ row.assists }}</td>
-                <td>{{ row.shots }}</td>
-                <td>{{ row.fastestGoalSpeedUuPerSec | kmh }}</td>
-                <td class="score-cell">{{ row.mvpScore }}</td>
-              } @else {
-                <td>{{ row.saves }}</td>
-                <td>{{ row.epicSaves }}</td>
-                <td>{{ row.demosInflicted }}</td>
-                <td>{{ row.demosTaken }}</td>
-              }
+              <td>{{ row.goals }}</td>
+              <td>{{ row.assists }}</td>
+              <td>{{ row.saves }}</td>
+              <td>{{ row.shots }}</td>
+              <td>{{ row.epicSaves }}</td>
+              <td>{{ row.demosInflicted }}</td>
+              <td>{{ row.demosTaken }}</td>
+              <td>{{ row.fastestGoalSpeedUuPerSec | kmh }}</td>
+              <td class="score-cell">{{ row.mvpScore }}</td>
             </tr>
           }
         </tbody>
@@ -58,6 +50,9 @@ export type PlayerStatsCategory = 'offense' | 'defense';
     </div>
   `,
   styles: [`
+    /* Span the full recap-grid row — same pattern as the event timeline — so the 10-column
+       table never has to compete for horizontal space with adjacent grid items. */
+    :host { grid-column: 1 / -1; }
     .table-wrapper { padding: 1rem 1.5rem; overflow-x: auto; }
     .table-title { font-family: var(--font-header); font-size: var(--text-base); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 0.75rem; }
     .stats-table { width: 100%; border-collapse: collapse; font-family: var(--font-body); font-size: var(--text-sm); }
@@ -77,11 +72,6 @@ export type PlayerStatsCategory = 'offense' | 'defense';
 })
 export class PlayerStatsTableComponent {
   readonly rows = input.required<PlayerStatsRow[]>();
-  readonly category = input.required<PlayerStatsCategory>();
-
-  protected readonly title = computed(() =>
-    this.category() === 'offense' ? 'Offense' : 'Defense',
-  );
 
   protected readonly sortedRows = computed(() =>
     [...this.rows()].sort((a, b) => {
