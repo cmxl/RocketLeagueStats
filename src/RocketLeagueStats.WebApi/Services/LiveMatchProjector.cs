@@ -83,17 +83,24 @@ internal sealed partial class LiveMatchProjector(
 
     private async Task HandleMatchInitializedAsync(MatchInitializedEvent evt)
     {
+        // Training / free-play / private-match events arrive with an empty MatchGuid. By project
+        // policy we don't track those as live matches — no live UI, no history, no recap. Returning
+        // early keeps `currentMatchId` null so the downstream HandleGoal / HandleStatfeed /
+        // HandleClock methods short-circuit on subsequent events from this offline session.
+        if (string.IsNullOrEmpty(evt.MatchGuid))
+        {
+            return;
+        }
+
         var matchId = Guid.NewGuid().ToString();
         this.currentMatchId = matchId;
         this.currentClockSeconds = 0;
         this.lastGoalTimestamp = null;
         this.seenPlayers.Clear();
 
-        // Coarse classification from MatchGuid presence: real online matches (ranked / casual /
-        // tournament) have a non-empty MatchGuid; offline modes (training / freeplay / private)
-        // leave it empty. Specific types (Ranked3v3, Training, etc.) get refined later when the
-        // MatchStateSnapshot parser lands.
-        var coarseType = string.IsNullOrEmpty(evt.MatchGuid) ? MatchType.Offline : MatchType.Online;
+        // Specific match types (Ranked3v3, Casual, etc.) get refined later when the
+        // MatchStateSnapshot parser lands; until then everything we track here is "Online".
+        var coarseType = MatchType.Online;
 
         var header = new MatchHeaderDto(
             MatchId: matchId,

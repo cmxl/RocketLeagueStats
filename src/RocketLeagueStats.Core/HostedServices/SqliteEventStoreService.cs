@@ -80,6 +80,16 @@ internal sealed class SqliteEventStoreService(
                     {
                         while (buffer.Count < this.options.MaxBatchSize && reader.TryRead(out var evt))
                         {
+                            // Drop training / free-play / private-match events: the wire emits an
+                            // empty MatchGuid for those modes, and we deliberately don't persist them
+                            // (no recap, no history, no analytics). Filtering at the bus-read step
+                            // keeps the Events / MatchSnapshots / EventParticipants tables clean of
+                            // ghost rows that will never have a parent Match.
+                            if (string.IsNullOrEmpty(evt.MatchGuid))
+                            {
+                                continue;
+                            }
+
                             buffer.Add(evt);
                         }
                     }

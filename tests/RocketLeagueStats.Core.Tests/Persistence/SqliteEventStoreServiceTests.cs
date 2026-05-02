@@ -304,6 +304,62 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
         Assert.All(participants, p => Assert.Equal(ParticipantRoles.BallHit, p.Role));
     }
 
+    [Fact]
+    public async Task EventsWithEmptyMatchGuid_AreDropped_NoRowsInserted()
+    {
+        // Training / free-play / private-match events arrive with an empty MatchGuid. The store
+        // skips them at the bus-read step so the schema stays free of orphan rows that would
+        // never have a parent Match. A subsequent online event in the same session is unaffected.
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 4, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+
+        await Task.Delay(100, cts.Token);
+
+        // Empty-string MatchGuid (training/freeplay shape on the wire).
+        bus.Publish(new GoalScoredEvent
+        {
+            EventName = KnownEvents.GoalScored,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(1),
+            MatchGuid = string.Empty,
+            Scorer = new PlayerRef("Tobi", 1, 0),
+            ImpactLocation = default,
+        });
+
+        // Null MatchGuid (defensive — shouldn't happen on the wire for typed events but the
+        // type system allows it via StatsEvent.MatchGuid being string?).
+        bus.Publish(new GoalScoredEvent
+        {
+            EventName = KnownEvents.GoalScored,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(2),
+            MatchGuid = null,
+            Scorer = new PlayerRef("Jay", 2, 0),
+            ImpactLocation = default,
+        });
+
+        // A real online event should still land — proves we filter on the event, not the session.
+        bus.Publish(new GoalScoredEvent
+        {
+            EventName = KnownEvents.GoalScored,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(3),
+            MatchGuid = "real-match",
+            Scorer = new PlayerRef("Vex", 3, 0),
+            ImpactLocation = default,
+        });
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.Events.CountAsync(), expected: 1, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+
+        await using var ctx = this.fixture.CreateDbContext();
+        Assert.Equal(1, await ctx.Events.CountAsync());
+        Assert.Equal(1, await ctx.Matches.CountAsync());
+        var stored = await ctx.Events.SingleAsync();
+        Assert.Equal("real-match", stored.MatchGuid);
+    }
+
     private SqliteEventStoreService CreateService(StatsEventBus bus, IOptions<EventStoreOptions> options) =>
         new(
             bus,

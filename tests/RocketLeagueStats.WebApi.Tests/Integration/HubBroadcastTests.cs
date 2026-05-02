@@ -10,8 +10,10 @@ using Xunit;
 
 public sealed class HubBroadcastTests(WebHostFixture fixture) : IClassFixture<WebHostFixture>
 {
+    private const string OnlineMatchGuid = "TEST-MATCH-GUID-0001";
+
     [Fact]
-    public async Task MatchInitialized_event_broadcasts_OnPhaseChanged_to_clients()
+    public async Task MatchInitialized_for_online_match_broadcasts_OnPhaseChanged_to_clients()
     {
         await using var hub = await this.ConnectHubAsync();
         var phaseChanges = new List<MatchPhase>();
@@ -19,18 +21,18 @@ public sealed class HubBroadcastTests(WebHostFixture fixture) : IClassFixture<We
         await hub.StartAsync();
         await Task.Delay(200);
 
-        fixture.GetBus().Publish(new MatchInitializedEvent());
+        fixture.GetBus().Publish(new MatchInitializedEvent { MatchGuid = OnlineMatchGuid });
         await Task.Delay(500);
 
         Assert.Contains(MatchPhase.Live, phaseChanges);
     }
 
     [Fact]
-    public async Task MatchDestroyed_alone_concludes_a_training_match_and_returns_to_idle()
+    public async Task MatchInitialized_with_empty_MatchGuid_is_not_tracked_as_live()
     {
-        // Training and free-play sessions end with MatchDestroyed only — no MatchEnded.
-        // Verified in real captures (rl-stats-2026-05-01.jsonl lines 172, 1462, 2194:
-        // empty MatchGuid, MatchDestroyed with no preceding MatchEnded).
+        // Training / free-play / private-match events arrive with an empty MatchGuid. By
+        // project policy these are NOT tracked as live (no live UI, no history, no recap),
+        // so the projector returns early and never emits OnPhaseChanged(Live).
         await using var hub = await this.ConnectHubAsync();
         var phaseChanges = new List<MatchPhase>();
         hub.On<MatchPhase>("OnPhaseChanged", phaseChanges.Add);
@@ -38,9 +40,29 @@ public sealed class HubBroadcastTests(WebHostFixture fixture) : IClassFixture<We
         await Task.Delay(200);
 
         var bus = fixture.GetBus();
-        bus.Publish(new MatchInitializedEvent());
+        bus.Publish(new MatchInitializedEvent { MatchGuid = string.Empty });
+        bus.Publish(new MatchDestroyedEvent { MatchGuid = string.Empty });
+        await Task.Delay(500);
+
+        Assert.DoesNotContain(MatchPhase.Live, phaseChanges);
+    }
+
+    [Fact]
+    public async Task MatchDestroyed_alone_concludes_an_online_match_and_returns_to_idle()
+    {
+        // Some online matches end with MatchDestroyed only — no preceding MatchEnded
+        // (e.g., player disconnect cases). The projector must still drive Idle on a
+        // bare MatchDestroyed for a tracked (non-empty MatchGuid) match.
+        await using var hub = await this.ConnectHubAsync();
+        var phaseChanges = new List<MatchPhase>();
+        hub.On<MatchPhase>("OnPhaseChanged", phaseChanges.Add);
+        await hub.StartAsync();
         await Task.Delay(200);
-        bus.Publish(new MatchDestroyedEvent());
+
+        var bus = fixture.GetBus();
+        bus.Publish(new MatchInitializedEvent { MatchGuid = OnlineMatchGuid });
+        await Task.Delay(200);
+        bus.Publish(new MatchDestroyedEvent { MatchGuid = OnlineMatchGuid });
         await Task.Delay(500);
 
         Assert.Contains(MatchPhase.Live, phaseChanges);
@@ -60,10 +82,10 @@ public sealed class HubBroadcastTests(WebHostFixture fixture) : IClassFixture<We
         await Task.Delay(200);
 
         var bus = fixture.GetBus();
-        bus.Publish(new MatchInitializedEvent());
+        bus.Publish(new MatchInitializedEvent { MatchGuid = OnlineMatchGuid });
         await Task.Delay(200);
-        bus.Publish(new MatchEndedEvent());
-        bus.Publish(new MatchDestroyedEvent());
+        bus.Publish(new MatchEndedEvent { MatchGuid = OnlineMatchGuid });
+        bus.Publish(new MatchDestroyedEvent { MatchGuid = OnlineMatchGuid });
         await Task.Delay(500);
 
         // Live → Idle once. The second MatchDestroyed shouldn't double-broadcast.
