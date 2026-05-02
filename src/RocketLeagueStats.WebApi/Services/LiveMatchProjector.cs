@@ -13,7 +13,6 @@ internal sealed partial class LiveMatchProjector(
     StatsEventBus bus,
     IHubContext<StatsHub, IStatsHubClient> hub,
     LiveMatchState state,
-    IMatchHistoryIndex history,
     ILogger<LiveMatchProjector> logger) : BackgroundService
 {
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to dispatch event of type {EventType}")]
@@ -121,7 +120,6 @@ internal sealed partial class LiveMatchProjector(
             ArenaName: null);
 
         state.BeginMatch(header);
-        history.BeginMatch(header);
         this.lastBroadcastPlayerStats = [];
 
         await hub.Clients.All.OnMatchInitialized(header);
@@ -136,7 +134,6 @@ internal sealed partial class LiveMatchProjector(
             return;
         }
 
-        history.CompleteMatch(summary.MatchId, summary);
         this.currentMatchId = null;
 
         await hub.Clients.All.OnMatchEnded(summary);
@@ -169,7 +166,6 @@ internal sealed partial class LiveMatchProjector(
         var dto = EventMapper.ToDto(evt, this.currentClockSeconds, secondsSinceLastGoal);
         state.AppendGoal(dto);
         var stamped = state.Goals[0];
-        history.AppendGoal(this.currentMatchId, stamped);
         this.lastGoalTimestamp = stamped.Timestamp;
 
         await hub.Clients.All.OnGoal(stamped);
@@ -196,7 +192,6 @@ internal sealed partial class LiveMatchProjector(
 
         var dto = EventMapper.ToDto(evt, this.currentClockSeconds);
         state.AppendStatfeed(dto);
-        history.AppendStatfeed(this.currentMatchId, dto);
 
         await hub.Clients.All.OnStatfeed(dto);
         await this.MaybeUpdateRosterAsync(dto.MainTarget, dto.SecondaryTarget);

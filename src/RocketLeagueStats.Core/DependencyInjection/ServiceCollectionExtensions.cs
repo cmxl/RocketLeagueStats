@@ -31,9 +31,17 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGameInstallLocator, GameInstallLocator>();
         services.AddSingleton<IStatsApiConfigWriter, StatsApiConfigWriter>();
 
-        var connectionString = StatsConnectionString.Resolve(configuration);
-        services.AddSingleton(new EventStoreConnectionString(connectionString));
-        services.AddDbContext<StatsDbContext>(opts => opts.UseSqlite(connectionString));
+        // Resolve the connection string LAZILY (factory delegates) rather than at registration
+        // time. WebApplicationFactory tests inject ConnectionStrings:Stats overrides via
+        // ConfigureAppConfiguration AFTER this method runs; resolving eagerly here would capture
+        // the user's real %LocalAppData% DB before the test config can override it.
+        services.AddSingleton(sp => new EventStoreConnectionString(
+            StatsConnectionString.Resolve(sp.GetRequiredService<IConfiguration>())));
+        services.AddDbContext<StatsDbContext>((sp, opts) =>
+        {
+            var conn = StatsConnectionString.Resolve(sp.GetRequiredService<IConfiguration>());
+            opts.UseSqlite(conn);
+        });
 
         return services;
     }

@@ -40,7 +40,7 @@ public static class WebServiceCollectionExtensions
 
         // Domain singletons
         services.AddSingleton<LiveMatchState>();
-        services.AddSingleton<IMatchHistoryIndex, MatchHistoryIndex>();
+        services.AddScoped<MatchHistoryReader>();
 
         // SettingsStore — directory configurable via Web:SettingsDirectory (defaults to %APPDATA%/RocketLeagueStats)
         var settingsDir = configuration["Web:SettingsDirectory"]
