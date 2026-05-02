@@ -94,19 +94,23 @@ public sealed class StatsEventParser
             KnownEvents.ReplayWillEnd => StampMarker(new ReplayWillEndEvent(), envelope, data, timestamp),
             KnownEvents.ReplayPlaybackEnd => StampMarker(new ReplayPlaybackEndEvent(), envelope, data, timestamp),
 
-            // Periodic state and forward-compat fallback (raw JSON kept for replay/aggregation)
+            // Periodic state and forward-compat fallback. The wire puts MatchGuid INSIDE Data for
+            // UpdateState (and observed for unknown events too), not on the outer envelope. Typed
+            // events get this for free via STJ deserialization; marker events use StampMarker. These
+            // two branches keep RawData verbatim instead of deserializing, so we have to extract the
+            // MatchGuid manually — same pattern as TryReadMatchGuid.
             KnownEvents.UpdateState => new MatchStateSnapshot
             {
                 EventName = envelope.Event,
                 Timestamp = timestamp,
-                MatchGuid = envelope.MatchGuid,
+                MatchGuid = TryReadMatchGuid(data) ?? envelope.MatchGuid,
                 RawData = data.Clone(),
             },
             _ => new UnknownDiscreteEvent
             {
                 EventName = envelope.Event,
                 Timestamp = timestamp,
-                MatchGuid = envelope.MatchGuid,
+                MatchGuid = (data.ValueKind == JsonValueKind.Object ? TryReadMatchGuid(data) : null) ?? envelope.MatchGuid,
                 RawData = data.ValueKind == JsonValueKind.Undefined ? default : data.Clone(),
             },
         };

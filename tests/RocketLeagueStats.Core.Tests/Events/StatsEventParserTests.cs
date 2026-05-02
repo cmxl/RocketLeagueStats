@@ -111,6 +111,49 @@ public class StatsEventParserTests
     }
 
     [Fact]
+    public void UpdateState_extracts_MatchGuid_from_inner_Data_not_outer_envelope()
+    {
+        // Real wire shape captured from the live plugin: the outer envelope has no MatchGuid; the
+        // identifier sits INSIDE Data. Typed events get MatchGuid auto-populated by STJ; markers use
+        // TryReadMatchGuid. UpdateState used to read only envelope.MatchGuid and silently produced
+        // null MatchGuid on every snapshot — which the SQLite writer then dropped, leaving
+        // MatchSnapshots empty in production. This test locks in the inner-Data extraction.
+        const string json = """{"Event":"UpdateState","Data":{"MatchGuid":"D22C143A11F146607ABA7DBDE3DA7507","Players":[{"Name":"cmxl"}],"Game":{"Teams":[]}}}""";
+
+        var evt = StatsEventParser.Parse(json);
+
+        var snapshot = Assert.IsType<MatchStateSnapshot>(evt);
+        Assert.Equal("D22C143A11F146607ABA7DBDE3DA7507", snapshot.MatchGuid);
+    }
+
+    [Fact]
+    public void UpdateState_falls_back_to_envelope_MatchGuid_when_inner_Data_lacks_it()
+    {
+        // Defensive: some captures show MatchGuid on the envelope but not in Data. Keep the
+        // fallback path so we don't regress on those wire variants.
+        const string json = """{"Event":"UpdateState","MatchGuid":"envelope-guid","Data":{"Players":[]}}""";
+
+        var evt = StatsEventParser.Parse(json);
+
+        var snapshot = Assert.IsType<MatchStateSnapshot>(evt);
+        Assert.Equal("envelope-guid", snapshot.MatchGuid);
+    }
+
+    [Fact]
+    public void UpdateState_with_empty_inner_MatchGuid_preserves_empty_string_for_writer_filter()
+    {
+        // Training / free-play snapshots arrive with an empty inner MatchGuid (verified in
+        // logs/snapshots/snapshot-20260502-195455-match001.json). Preserve the empty string
+        // verbatim so the SQLite writer's empty-MatchGuid filter can drop it cleanly.
+        const string json = """{"Event":"UpdateState","Data":{"MatchGuid":"","Players":[]}}""";
+
+        var evt = StatsEventParser.Parse(json);
+
+        var snapshot = Assert.IsType<MatchStateSnapshot>(evt);
+        Assert.Equal(string.Empty, snapshot.MatchGuid);
+    }
+
+    [Fact]
     public void Parses_typed_event_when_Data_is_an_escaped_JSON_string()
     {
         // Mirrors the live wire shape captured in the JSONL trace — the BallHit example from the docs,
