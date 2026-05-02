@@ -1,8 +1,7 @@
-// FlushAsync is a forward-looking stub; real body (Tasks 12-15) will access instance state
-// and consume both parameters. Suppress until then.
-#pragma warning disable CA1822, IDE0052, IDE0060
 namespace RocketLeagueStats.Core.HostedServices;
 
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -36,9 +35,14 @@ internal sealed class SqliteEventStoreService(
             new EventId(3, nameof(SqliteEventStoreService)),
             "Failed to flush event batch of size {BatchSize}; dropping batch.");
 
+    private static readonly JsonSerializerOptions PayloadJsonOptions = new()
+    {
+        WriteIndented = false,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
     private readonly EventStoreOptions options = options.Value;
 
-    // Used in Tasks 12-15 when FlushAsync writes to SQLite.
     private readonly string connectionString = connectionString.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -123,11 +127,105 @@ internal sealed class SqliteEventStoreService(
         }
     }
 
-    /// <summary>
-    /// Flushes a batch to SQLite. Real implementation added in subsequent tasks (12-15).
-    /// Empty stub keeps the loop alive while we TDD the writes.
-    /// </summary>
-    private Task FlushAsync(
-        IReadOnlyList<StatsEvent> batch, CancellationToken cancellationToken) =>
-        Task.CompletedTask;
+    private async Task FlushAsync(IReadOnlyList<StatsEvent> batch, CancellationToken cancellationToken)
+    {
+        // We open a fresh connection per batch instead of holding one for the lifetime of the service.
+        // The connection-pool inside Microsoft.Data.Sqlite means this is cheap (the underlying SQLite
+        // handle is reused), but it gives us automatic recovery: if a connection ever enters a bad
+        // state we discard it on Dispose and the next batch gets a clean one. EF Core's DbContext
+        // would normally manage this for us; raw ADO.NET pushes the responsibility back to us.
+        await using var connection = new SqliteConnection(this.connectionString);
+        await connection.OpenAsync(cancellationToken);
+        ApplyPragmas(connection);
+
+        // BeginTransactionAsync returns DbTransaction; we cast to SqliteTransaction so the
+        // commands' Transaction property gets the concrete type (Microsoft.Data.Sqlite's
+        // SqliteCommand.Transaction is typed as SqliteTransaction, not DbTransaction).
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using var insertEvent = connection.CreateCommand();
+        insertEvent.Transaction = tx;
+        // RETURNING Id requires SQLite >= 3.35 (bundled with Microsoft.Data.Sqlite 10). Saves a
+        // round-trip vs the older `last_insert_rowid()` pattern; matters because we issue this
+        // INSERT once per discrete event and need the Id for the subsequent participant rows.
+        insertEvent.CommandText = """
+            INSERT INTO Events (MatchGuid, EventName, TimestampUtc, Payload)
+            VALUES ($matchGuid, $eventName, $ts, $payload)
+            RETURNING Id;
+            """;
+        var pMatchGuid = insertEvent.Parameters.Add("$matchGuid", SqliteType.Text);
+        var pEventName = insertEvent.Parameters.Add("$eventName", SqliteType.Text);
+        var pTimestamp = insertEvent.Parameters.Add("$ts", SqliteType.Integer);
+        var pPayload = insertEvent.Parameters.Add("$payload", SqliteType.Text);
+
+        await using var insertParticipant = connection.CreateCommand();
+        insertParticipant.Transaction = tx;
+        insertParticipant.CommandText = """
+            INSERT INTO EventParticipants (EventId, MatchGuid, PlayerName, Shortcut, TeamNum, Role, TimestampUtc)
+            VALUES ($eventId, $matchGuid, $playerName, $shortcut, $teamNum, $role, $ts);
+            """;
+        var ppEventId = insertParticipant.Parameters.Add("$eventId", SqliteType.Integer);
+        var ppMatchGuid = insertParticipant.Parameters.Add("$matchGuid", SqliteType.Text);
+        var ppPlayerName = insertParticipant.Parameters.Add("$playerName", SqliteType.Text);
+        var ppShortcut = insertParticipant.Parameters.Add("$shortcut", SqliteType.Integer);
+        var ppTeamNum = insertParticipant.Parameters.Add("$teamNum", SqliteType.Integer);
+        var ppRole = insertParticipant.Parameters.Add("$role", SqliteType.Text);
+        var ppTimestamp = insertParticipant.Parameters.Add("$ts", SqliteType.Integer);
+
+        foreach (var evt in batch)
+        {
+            var ts = (evt.Timestamp ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
+
+            pMatchGuid.Value = (object?)evt.MatchGuid ?? DBNull.Value;
+            pEventName.Value = evt.EventName;
+            pTimestamp.Value = ts;
+            // evt.GetType() (not typeof(StatsEvent)) — System.Text.Json must see the concrete derived
+            // type to emit the typed event's fields. Passing the base type would only serialize the
+            // three envelope properties (EventName/Timestamp/MatchGuid). The reflection-based path is
+            // intentional here: it covers UnknownDiscreteEvent and any future event types without
+            // updating StatsEventJsonContext.
+            pPayload.Value = JsonSerializer.Serialize(evt, evt.GetType(), PayloadJsonOptions);
+
+            var eventId = (long)(await insertEvent.ExecuteScalarAsync(cancellationToken))!;
+
+            if (evt.MatchGuid is null)
+            {
+                continue;
+            }
+
+            foreach (var p in EventParticipantExtractor.Extract(evt))
+            {
+                ppEventId.Value = eventId;
+                ppMatchGuid.Value = evt.MatchGuid;
+                ppPlayerName.Value = p.PlayerName;
+                ppShortcut.Value = p.Shortcut;
+                ppTeamNum.Value = p.TeamNum;
+                ppRole.Value = p.Role;
+                ppTimestamp.Value = ts;
+                await insertParticipant.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+
+        await tx.CommitAsync(cancellationToken);
+    }
+
+    private static void ApplyPragmas(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        // PRAGMAs must be set per connection: SQLite stores them in connection state, not the file.
+        // Most importantly, foreign_keys=ON defaults to OFF on every new SQLite connection — EF Core's
+        // SQLite provider sets it for its DbContext connections automatically, but our raw writer
+        // pool does not. Without this we'd silently skip FK enforcement and let orphaned rows in.
+        // journal_mode=WAL is persisted in the file so it only "takes" the first time and is a no-op
+        // on subsequent connections; the redundant set is harmless and self-documenting.
+        cmd.CommandText = """
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = -8000;
+            PRAGMA foreign_keys = ON;
+            PRAGMA wal_autocheckpoint = 1000;
+            """;
+        cmd.ExecuteNonQuery();
+    }
 }
