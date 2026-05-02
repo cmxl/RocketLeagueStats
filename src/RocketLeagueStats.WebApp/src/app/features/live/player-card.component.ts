@@ -11,10 +11,15 @@ import { SettingsStore } from '../../core/state/settings.store';
   template: `
     <rls-panel [team]="team()" [glow]="isOwn()">
       <div class="player-card">
-        <h3 class="player-card__name" [class.player-card__name--you]="isOwn()">
-          {{ player().player.name }}
-          @if (isOwn()) { <span class="player-card__you">YOU</span> }
-        </h3>
+        <div class="player-card__header">
+          <h3 class="player-card__name" [class.player-card__name--you]="isOwn()">
+            {{ player().player.name }}
+            @if (isOwn()) { <span class="player-card__you">YOU</span> }
+          </h3>
+          @if (platform()) {
+            <span class="player-card__platform">{{ platform() }}</span>
+          }
+        </div>
         <dl class="stats">
           <div class="stat"><dt>G</dt><dd>{{ player().goals }}</dd></div>
           <div class="stat"><dt>A</dt><dd>{{ player().assists }}</dd></div>
@@ -27,9 +32,11 @@ import { SettingsStore } from '../../core/state/settings.store';
   `,
   styles: [`
     .player-card { padding: 0.75rem; }
-    .player-card__name { font-family: var(--font-header); font-size: var(--text-base); font-weight: 700; margin: 0 0 0.5rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem; }
+    .player-card__header { display: flex; align-items: baseline; gap: 0.5rem; margin: 0 0 0.5rem; flex-wrap: wrap; }
+    .player-card__name { font-family: var(--font-header); font-size: var(--text-base); font-weight: 700; margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem; }
     .player-card__name--you { color: var(--accent-mvp); }
     .player-card__you { font-size: var(--text-xs); background: var(--accent-mvp); color: var(--bg-base); padding: 0.1rem 0.35rem; border-radius: 2px; font-weight: 700; }
+    .player-card__platform { font-family: var(--font-header); font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 0.1rem 0.35rem; border: 1px solid color-mix(in srgb, var(--text-muted) 60%, transparent); border-radius: 2px; }
     .stats { display: flex; gap: 0.75rem; margin: 0; padding: 0; }
     .stat { display: flex; flex-direction: column; align-items: center; }
     .stat dt { font-family: var(--font-header); font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; }
@@ -45,4 +52,5 @@ export class PlayerCardComponent {
     const myName = this.settings.current().playerName;
     return !!myName && myName === this.player().player.name;
   });
+  protected readonly platform = computed(() => this.player().player.platform);
 }

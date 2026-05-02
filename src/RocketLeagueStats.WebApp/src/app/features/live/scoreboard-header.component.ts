@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, inject } from '@angular/core';
 import { LiveMatchStore } from '../../core/state/live-match.store';
 import { MatchTypeBadgeComponent } from '../../shared/components/match-type-badge.component';
 import { DurationPipe } from '../../shared/pipes/duration.pipe';
@@ -9,7 +9,9 @@ import { DurationPipe } from '../../shared/pipes/duration.pipe';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [MatchTypeBadgeComponent, DurationPipe],
   template: `
-    <div class="scoreboard">
+    <div class="scoreboard"
+         [style.--team-blue]="blueColor()"
+         [style.--team-orange]="orangeColor()">
       <div class="scoreboard__meta">
         @if (live.currentMatch(); as match) {
           <rls-match-type-badge [type]="match.type" />
@@ -21,13 +23,13 @@ import { DurationPipe } from '../../shared/pipes/duration.pipe';
       </div>
       <div class="scoreboard__scores">
         <div class="scoreboard__team scoreboard__team--blue">
-          <span class="scoreboard__team-label">BLUE</span>
+          <span class="scoreboard__team-label">{{ blueLabel() }}</span>
           <span class="scoreboard__score">{{ live.blueScore() }}</span>
         </div>
         <span class="scoreboard__divider">—</span>
         <div class="scoreboard__team scoreboard__team--orange">
           <span class="scoreboard__score">{{ live.orangeScore() }}</span>
-          <span class="scoreboard__team-label">ORANGE</span>
+          <span class="scoreboard__team-label">{{ orangeLabel() }}</span>
         </div>
       </div>
     </div>
@@ -69,4 +71,23 @@ import { DurationPipe } from '../../shared/pipes/duration.pipe';
 })
 export class ScoreboardHeaderComponent {
   protected readonly live = inject(LiveMatchStore);
+
+  // Snapshot-driven team metadata. Falls back to the existing CSS variables (`--team-blue` /
+  // `--team-orange`) until the first MatchStateSnapshot of a match arrives — `'unset'` lets
+  // the inherited variable show through instead of overriding it with an empty string.
+  protected readonly blueColor = computed(() => {
+    const team = this.live.currentMatch()?.blueTeam;
+    return team ? `#${team.colorPrimary}` : 'unset';
+  });
+
+  protected readonly orangeColor = computed(() => {
+    const team = this.live.currentMatch()?.orangeTeam;
+    return team ? `#${team.colorPrimary}` : 'unset';
+  });
+
+  protected readonly blueLabel = computed(() =>
+    (this.live.currentMatch()?.blueTeam?.name ?? 'BLUE').toUpperCase());
+
+  protected readonly orangeLabel = computed(() =>
+    (this.live.currentMatch()?.orangeTeam?.name ?? 'ORANGE').toUpperCase());
 }

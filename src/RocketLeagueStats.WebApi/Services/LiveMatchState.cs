@@ -84,6 +84,38 @@ internal sealed class LiveMatchState
         }
     }
 
+    /// <summary>
+    /// Enriches the current match's header with full roster + team metadata + arena from the first
+    /// MatchStateSnapshot tick. Returns the updated header so the projector can broadcast it, or
+    /// null if no match is active. Existing roster entries are replaced (snapshot is authoritative);
+    /// scores and event feeds are preserved.
+    /// </summary>
+    public MatchHeaderDto? EnrichFromSnapshot(
+        PlayerRefDto[] bluePlayers,
+        PlayerRefDto[] orangePlayers,
+        TeamDto? blueTeam,
+        TeamDto? orangeTeam,
+        string? arenaName)
+    {
+        lock (this.syncLock)
+        {
+            if (this.activeMatch is null)
+            {
+                return null;
+            }
+
+            this.activeMatch = this.activeMatch with
+            {
+                BluePlayers = bluePlayers,
+                OrangePlayers = orangePlayers,
+                BlueTeam = blueTeam,
+                OrangeTeam = orangeTeam,
+                ArenaName = arenaName ?? this.activeMatch.ArenaName,
+            };
+            return this.activeMatch;
+        }
+    }
+
     public void AppendGoal(GoalDto goal)
     {
         lock (this.syncLock)

@@ -133,4 +133,49 @@ public sealed class LiveMatchStateTests
         var result = state.UpdateRoster([], []);
         Assert.Null(result);
     }
+
+    [Fact]
+    public void EnrichFromSnapshot_overwrites_roster_and_populates_team_metadata_and_arena()
+    {
+        var state = new LiveMatchState();
+        state.BeginMatch(SampleHeader());
+        state.AppendGoal(SampleGoal("blue"));
+        Assert.Equal(1, state.BlueScore);
+        Assert.Null(state.CurrentMatch!.BlueTeam);
+
+        var blue = new[]
+        {
+            new PlayerRefDto("cmxl", 5, "blue", "Steam"),
+            new PlayerRefDto("BoogerEater120", 6, "blue", "Epic"),
+        };
+        var orange = new[] { new PlayerRefDto("B4D_Morais", 1, "orange", "PS4") };
+
+        var enriched = state.EnrichFromSnapshot(
+            bluePlayers: blue,
+            orangePlayers: orange,
+            blueTeam: new TeamDto("Blue", "1873FF", "E5E5E5"),
+            orangeTeam: new TeamDto("Orange", "C26418", "E5E5E5"),
+            arenaName: "street_p");
+
+        Assert.NotNull(enriched);
+        Assert.Equal(2, enriched!.BluePlayers.Length);
+        Assert.Equal("Steam", enriched.BluePlayers[0].Platform);
+        Assert.Equal("PS4", enriched.OrangePlayers[0].Platform);
+        Assert.NotNull(enriched.BlueTeam);
+        Assert.Equal("Blue", enriched.BlueTeam!.Name);
+        Assert.Equal("1873FF", enriched.BlueTeam.ColorPrimary);
+        Assert.NotNull(enriched.OrangeTeam);
+        Assert.Equal("C26418", enriched.OrangeTeam!.ColorPrimary);
+        Assert.Equal("street_p", enriched.ArenaName);
+        // Scores preserved.
+        Assert.Equal(1, state.BlueScore);
+    }
+
+    [Fact]
+    public void EnrichFromSnapshot_returns_null_when_no_match_active()
+    {
+        var state = new LiveMatchState();
+        var result = state.EnrichFromSnapshot([], [], null, null, null);
+        Assert.Null(result);
+    }
 }

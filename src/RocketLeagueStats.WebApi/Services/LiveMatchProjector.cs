@@ -24,10 +24,15 @@ internal sealed partial class LiveMatchProjector(
     private DateTime? lastGoalTimestamp;
     private PlayerStatsRowDto[] lastBroadcastPlayerStats = [];
 
-    // Roster accumulator: built up from PlayerRefs that appear in goal/statfeed events. RL's
-    // MatchInitialized doesn't carry the roster (only MatchGuid), and MatchStateSnapshot's
-    // wire format is not yet parsed — so we discover players lazily as they generate events.
-    // Cleared on each MatchInitialized; keyed by Shortcut (RL's stable per-match player int id).
+    // First-snapshot-per-match flag. Snapshots fire at ~30Hz; we only enrich the header from the
+    // first one because the fields we extract (roster, team metadata, arena) are stable for the
+    // duration of a match. Reset on each MatchInitialized.
+    private bool enrichedFromSnapshot;
+
+    // Roster accumulator: built up from PlayerRefs that appear in goal/statfeed events. Used as a
+    // fallback when MatchStateSnapshot enrichment hasn't happened yet (e.g., very first goal of a
+    // match arrives before the first snapshot tick) or when a player joins mid-match and is
+    // discovered via a discrete event before the next snapshot lands. Cleared on MatchInitialized.
     private readonly Dictionary<int, PlayerRefDto> seenPlayers = [];
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -76,6 +81,9 @@ internal sealed partial class LiveMatchProjector(
             case ClockUpdatedSecondsEvent clock:
                 await this.HandleClockAsync(clock);
                 break;
+            case MatchStateSnapshot snapshot:
+                await this.HandleSnapshotAsync(snapshot);
+                break;
             default:
                 break;
         }
@@ -97,6 +105,7 @@ internal sealed partial class LiveMatchProjector(
         this.currentClockSeconds = 0;
         this.lastGoalTimestamp = null;
         this.seenPlayers.Clear();
+        this.enrichedFromSnapshot = false;
 
         // Specific match types (Ranked3v3, Casual, etc.) get refined later when the
         // MatchStateSnapshot parser lands; until then everything we track here is "Online".
@@ -234,6 +243,79 @@ internal sealed partial class LiveMatchProjector(
             await hub.Clients.All.OnRosterUpdated(updated);
         }
     }
+
+    private async Task HandleSnapshotAsync(MatchStateSnapshot snapshot)
+    {
+        // Snapshot enrichment only applies once we have an active live match. Snapshots that arrive
+        // during the post-game podium screen (after MatchEnded/MatchDestroyed but before the next
+        // MatchInitialized) are ignored.
+        if (this.currentMatchId is null)
+        {
+            return;
+        }
+
+        // Snapshots fire at ~30Hz; the fields we care about (roster, team colors/names, arena) are
+        // stable for a match's duration. Enrich on the first snapshot only — subsequent ticks are
+        // a waste of bus → SignalR cycles.
+        if (this.enrichedFromSnapshot)
+        {
+            return;
+        }
+
+        if (!MatchStateSnapshotData.TryParse(snapshot.RawData, out var data) || data is null)
+        {
+            return;
+        }
+
+        var (blueTeam, orangeTeam) = (FindTeam(data.Teams, teamNum: 0), FindTeam(data.Teams, teamNum: 1));
+        var bluePlayers = data.Players
+            .Where(p => p.TeamNum == 0)
+            .Select(SnapshotPlayerToDto)
+            .ToArray();
+        var orangePlayers = data.Players
+            .Where(p => p.TeamNum == 1)
+            .Select(SnapshotPlayerToDto)
+            .ToArray();
+
+        // Sync the lazy-discovery accumulator with the authoritative snapshot roster so any future
+        // discrete event from a player who somehow wasn't in the snapshot still triggers a roster
+        // update via MaybeUpdateRosterAsync.
+        this.seenPlayers.Clear();
+        foreach (var p in bluePlayers.Concat(orangePlayers))
+        {
+            this.seenPlayers[p.Shortcut] = p;
+        }
+
+        var enriched = state.EnrichFromSnapshot(bluePlayers, orangePlayers, blueTeam, orangeTeam, data.Arena);
+        if (enriched is null)
+        {
+            return;
+        }
+
+        this.enrichedFromSnapshot = true;
+        await hub.Clients.All.OnRosterUpdated(enriched);
+        await this.MaybeBroadcastPlayerStatsAsync();
+    }
+
+    private static TeamDto? FindTeam(IReadOnlyList<SnapshotTeam> teams, int teamNum)
+    {
+        for (var i = 0; i < teams.Count; i++)
+        {
+            if (teams[i].TeamNum == teamNum)
+            {
+                return new TeamDto(teams[i].Name, teams[i].ColorPrimary, teams[i].ColorSecondary);
+            }
+        }
+
+        return null;
+    }
+
+    private static PlayerRefDto SnapshotPlayerToDto(SnapshotPlayer p) =>
+        new(
+            Name: p.Name,
+            Shortcut: p.Shortcut,
+            Team: p.TeamNum switch { 0 => "blue", 1 => "orange", _ => "unknown" },
+            Platform: p.Platform);
 
     private async Task HandleClockAsync(ClockUpdatedSecondsEvent evt)
     {
