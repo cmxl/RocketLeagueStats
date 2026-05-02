@@ -17,6 +17,7 @@ public static class ServiceCollectionExtensions
     {
         services.Configure<StatsApiOptions>(configuration.GetSection(StatsApiOptions.SectionName));
         services.Configure<EventLogOptions>(configuration.GetSection(EventLogOptions.SectionName));
+        services.Configure<EventStoreOptions>(configuration.GetSection(EventStoreOptions.SectionName));
         services.Configure<GameSetupOptions>(configuration.GetSection(GameSetupOptions.SectionName));
         services.Configure<DiagnosticsOptions>(configuration.GetSection(DiagnosticsOptions.SectionName));
 
@@ -30,11 +31,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGameInstallLocator, GameInstallLocator>();
         services.AddSingleton<IStatsApiConfigWriter, StatsApiConfigWriter>();
 
-        var connectionString = configuration.GetConnectionString("Stats");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            connectionString = "Data Source=:memory:";   // temporary stub; replaced in Task 4
-        }
+        var connectionString = StatsConnectionString.Resolve(configuration);
+        services.AddSingleton(new EventStoreConnectionString(connectionString));
         services.AddDbContext<StatsDbContext>(opts => opts.UseSqlite(connectionString));
 
         return services;
@@ -42,10 +40,14 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddRocketLeagueStatsHostingDefaults(this IServiceCollection services)
     {
+        // EventStoreStartupService runs migrations + logs path/size before any other hosted service
+        // touches the DB; subsequent services depend on the schema being present.
+        services.AddHostedService<EventStoreStartupService>();
         services.AddHostedService<IniBootstrapHostedService>();
         services.AddHostedService<StatsApiListenerService>();
         services.AddHostedService<JsonlEventLoggerService>();
         services.AddHostedService<SnapshotDumperService>();
+        services.AddHostedService<SqliteEventStoreService>();
         return services;
     }
 }
