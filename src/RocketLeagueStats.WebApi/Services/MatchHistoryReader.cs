@@ -58,13 +58,15 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
         var matchGuids = matches.Select(m => m.MatchGuid).ToList();
         var participantsByMatch = await this.GetParticipantsByMatchAsync(matchGuids, ct);
         var goalsByMatch = await this.GetGoalsByMatchAsync(matchGuids, ct);
+        var playerStatsByMatch = await this.GetPlayerMatchStatsByMatchAsync(matchGuids, ct);
 
         var summaries = new List<MatchSummaryDto>(matches.Count);
         foreach (var match in matches)
         {
             participantsByMatch.TryGetValue(match.MatchGuid, out var matchParticipants);
             goalsByMatch.TryGetValue(match.MatchGuid, out var matchGoals);
-            summaries.Add(BuildSummary(match, matchParticipants ?? [], matchGoals ?? []));
+            playerStatsByMatch.TryGetValue(match.MatchGuid, out var matchPlayerStats);
+            summaries.Add(BuildSummary(match, matchParticipants ?? [], matchGoals ?? [], matchPlayerStats ?? []));
         }
 
         var ordered = filter.Sort switch
@@ -92,6 +94,11 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
         var participants = (await this.GetParticipantsByMatchAsync([match.MatchGuid], ct))
             .GetValueOrDefault(match.MatchGuid, []);
 
+        var persistedPlayerStats = await this.db.PlayerMatchStats
+            .AsNoTracking()
+            .Where(p => p.MatchGuid == match.MatchGuid)
+            .ToListAsync(ct);
+
         var rawEvents = await this.db.Events
             .AsNoTracking()
             .Where(e => e.MatchGuid == match.MatchGuid &&
@@ -107,11 +114,12 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
             .Cast<GoalScoredEvent>()
             .ToList();
 
-        var summary = BuildSummary(match, participants, nonPhantomGoals);
+        var summary = BuildSummary(match, participants, nonPhantomGoals, persistedPlayerStats);
 
         var goalDtos = BuildGoalDtos(rawEvents, match.FirstSeenAtUtc).ToList();
         var statfeedDtos = BuildStatfeedDtos(rawEvents, match.FirstSeenAtUtc).ToList();
-        var playerStats = PlayerTallyAggregator.Aggregate(summary.AllPlayers, goalDtos, statfeedDtos, markMvp: true);
+        var aggregated = PlayerTallyAggregator.Aggregate(summary.AllPlayers, goalDtos, statfeedDtos, markMvp: true);
+        var playerStats = MergePersistedStats(aggregated, persistedPlayerStats);
         var mvp = playerStats.FirstOrDefault(r => r.IsMvp)?.Player;
 
         return new MatchRecapDto(
@@ -121,6 +129,45 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
             PlayerStats: playerStats,
             TimeBetweenGoalsSeconds: ComputeTimeBetweenGoals(goalDtos),
             Flow: BuildFlow(summary, goalDtos));
+    }
+
+    // Overlay persisted PlayerMatchStats onto the event-derived aggregate, mirroring what
+    // LiveMatchState.CurrentPlayerStats does for the live wire. The wire's own scoreboard values
+    // (Score/Touches/Goals/Assists/Saves/Shots) win over event-derived approximations because RL
+    // itself is the source of truth — saves and shots in particular don't always have a matching
+    // statfeed entry, so the event-only path under-counts. Platform also gets surfaced from
+    // persistence (EventParticipants doesn't carry it). Pre-migration matches have no persisted
+    // rows; those keep the aggregator's output untouched.
+    private static PlayerStatsRowDto[] MergePersistedStats(
+        PlayerStatsRowDto[] aggregated,
+        List<PlayerMatchStats> persisted)
+    {
+        if (persisted.Count == 0)
+        {
+            return aggregated;
+        }
+
+        var byShortcut = persisted.ToDictionary(p => p.Shortcut);
+        for (var i = 0; i < aggregated.Length; i++)
+        {
+            if (!byShortcut.TryGetValue(aggregated[i].Player.Shortcut, out var p))
+            {
+                continue;
+            }
+
+            aggregated[i] = aggregated[i] with
+            {
+                Player = aggregated[i].Player with { Platform = p.Platform },
+                Goals = p.Goals,
+                Assists = p.Assists,
+                Saves = p.Saves,
+                Shots = p.Shots,
+                Score = p.Score,
+                Touches = p.Touches,
+            };
+        }
+
+        return aggregated;
     }
 
     private async Task<Dictionary<string, List<ParticipantRow>>> GetParticipantsByMatchAsync(
@@ -137,6 +184,20 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
         return rows
             .GroupBy(p => p.MatchGuid)
             .ToDictionary(g => g.Key, g => g.ToList());
+    }
+
+    private async Task<Dictionary<string, List<PlayerMatchStats>>> GetPlayerMatchStatsByMatchAsync(
+        List<string> matchGuids,
+        CancellationToken ct)
+    {
+        var rows = await this.db.PlayerMatchStats
+            .AsNoTracking()
+            .Where(p => matchGuids.Contains(p.MatchGuid))
+            .ToListAsync(ct);
+
+        return rows
+            .GroupBy(p => p.MatchGuid, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
     }
 
     private async Task<Dictionary<string, List<GoalScoredEvent>>> GetGoalsByMatchAsync(
@@ -177,9 +238,10 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
     private static MatchSummaryDto BuildSummary(
         Match match,
         List<ParticipantRow> participants,
-        List<GoalScoredEvent> nonPhantomGoals)
+        List<GoalScoredEvent> nonPhantomGoals,
+        List<PlayerMatchStats> playerMatchStats)
     {
-        var allPlayers = MapParticipantsForRoster(participants);
+        var allPlayers = MapParticipantsForRoster(participants, playerMatchStats);
         var blueScore = nonPhantomGoals.Count(g => g.Scorer.TeamNum == 0);
         var orangeScore = nonPhantomGoals.Count(g => g.Scorer.TeamNum == 1);
 
@@ -205,27 +267,56 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
             AllPlayers: allPlayers,
             Mvp: null,
             TotalGoals: nonPhantomGoals.Count,
-            FastestGoal: fastestGoal);
+            FastestGoal: fastestGoal,
+            BlueTeam: BuildTeam(match.BlueTeamName, match.BlueColorPrimary, match.BlueColorSecondary),
+            OrangeTeam: BuildTeam(match.OrangeTeamName, match.OrangeColorPrimary, match.OrangeColorSecondary),
+            ArenaName: match.Arena);
     }
 
-    // Platform isn't persisted on EventParticipants today — populating it would require parsing the
-    // last MatchSnapshot for the match. Historical recaps return an empty Platform string; the
-    // frontend renders the platform pill conditionally so absent values just hide it.
-    private static PlayerRefDto[] MapParticipantsForRoster(List<ParticipantRow> rows) =>
-        [.. rows
+    private static TeamDto? BuildTeam(string? name, string? primary, string? secondary)
+    {
+        // All three columns land together at MatchEnded — null on legacy rows. Defensive default
+        // for partial-fill weirdness uses empty strings so the contract stays non-null on each
+        // field once the team itself exists.
+        if (name is null && primary is null && secondary is null)
+        {
+            return null;
+        }
+
+        return new TeamDto(name ?? string.Empty, primary ?? string.Empty, secondary ?? string.Empty);
+    }
+
+    // Prefer PlayerMatchStats as the roster source when available — it's the wire's authoritative
+    // per-match snapshot captured at MatchEnded with stable name/team/platform/shortcut. Falls
+    // back to EventParticipants for pre-migration matches that don't have PlayerMatchStats rows;
+    // those can't supply Platform (EventParticipants doesn't carry it) so it stays empty there.
+    private static PlayerRefDto[] MapParticipantsForRoster(
+        List<ParticipantRow> rows,
+        List<PlayerMatchStats> playerMatchStats)
+    {
+        if (playerMatchStats.Count > 0)
+        {
+            return [.. playerMatchStats
+                .OrderBy(p => p.Shortcut)
+                .Select(p => new PlayerRefDto(p.PlayerName, p.Shortcut, TeamFromNum(p.TeamNum), p.Platform))];
+        }
+
+        return [.. rows
             .GroupBy(r => r.Shortcut)
             .Select(g =>
             {
                 var first = g.First();
-                var team = first.TeamNum switch
-                {
-                    0 => "blue",
-                    1 => "orange",
-                    _ => "unknown",
-                };
-                return new PlayerRefDto(first.PlayerName, g.Key, team, Platform: string.Empty);
+                return new PlayerRefDto(first.PlayerName, g.Key, TeamFromNum(first.TeamNum), Platform: string.Empty);
             })
             .OrderBy(p => p.Shortcut)];
+    }
+
+    private static string TeamFromNum(int teamNum) => teamNum switch
+    {
+        0 => "blue",
+        1 => "orange",
+        _ => "unknown",
+    };
 
     private static IEnumerable<GoalDto> BuildGoalDtos(List<EventRow> rawEvents, long matchStartUtc)
     {

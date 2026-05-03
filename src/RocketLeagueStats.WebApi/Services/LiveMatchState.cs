@@ -226,6 +226,10 @@ internal sealed class LiveMatchState
                 .OrderByDescending(g => g.GoalSpeedUuPerSec)
                 .FirstOrDefault();
 
+            // Carry team metadata + arena from the active header so the OnMatchEnded payload
+            // (which the toast/popup renders against) shows the same team colors / labels the
+            // user just watched. The DB-backed reader pulls the same data from PlayerMatchStats
+            // / Matches columns post-flush, so live and historical recap render identically.
             var summary = new MatchSummaryDto(
                 MatchId: this.activeMatch.MatchId,
                 StartedAt: this.activeMatch.StartedAt,
@@ -237,7 +241,10 @@ internal sealed class LiveMatchState
                 AllPlayers: allPlayers,
                 Mvp: mvp,
                 TotalGoals: this.goals.Count,
-                FastestGoal: fastestGoal);
+                FastestGoal: fastestGoal,
+                BlueTeam: this.activeMatch.BlueTeam,
+                OrangeTeam: this.activeMatch.OrangeTeam,
+                ArenaName: this.activeMatch.ArenaName);
 
             this.activeMatch = null;
             this.elapsedSeconds = null;

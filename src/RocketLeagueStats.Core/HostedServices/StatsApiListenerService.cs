@@ -12,7 +12,6 @@ using RocketLeagueStats.Core.Connection;
 internal sealed class StatsApiListenerService(
     IStatsApiClient client,
     IOptions<StatsApiOptions> options,
-    IHostApplicationLifetime lifetime,
     ILogger<StatsApiListenerService> logger) : BackgroundService
 {
     private static readonly Action<ILogger, Exception?> LogCancellation =
@@ -33,11 +32,11 @@ internal sealed class StatsApiListenerService(
             new EventId(4, nameof(StatsApiListenerService)),
             "Stats API connect failed (attempt {Attempt}). Retrying in {Delay}.");
 
-    private static readonly Action<ILogger, int, Exception?> LogRetriesExhausted =
+    private static readonly Action<ILogger, int, Exception?> LogPipelineExhausted =
         LoggerMessage.Define<int>(
-            LogLevel.Error,
+            LogLevel.Warning,
             new EventId(5, nameof(StatsApiListenerService)),
-            "Stats API connect retries exhausted ({Attempts} attempts). Is Rocket League running? Requesting host shutdown.");
+            "Stats API connect retries exhausted ({Attempts} attempts) — re-entering pipeline. The WebApi keeps running so you can still browse history while Rocket League is closed.");
 
     private readonly StatsApiOptions options = options.Value;
 
@@ -58,18 +57,18 @@ internal sealed class StatsApiListenerService(
             }
             catch (SocketException ex)
             {
-                // Polly exhausted its retry budget. Request a graceful host shutdown via the
-                // application lifetime — re-throwing during shutdown causes deadlocks against
-                // host.StopAsync, so we cooperate instead.
-                LogRetriesExhausted(logger, this.options.ConnectRetry.MaxAttempts, ex);
-                lifetime.StopApplication();
-                return;
+                // Defensive — with the default MaxAttempts = int.MaxValue this catch is effectively
+                // unreachable, but smaller values (test fixtures, custom config) can still exhaust
+                // the pipeline. Sleep one MaxDelay then re-enter the outer loop instead of letting
+                // the BackgroundService die — the WebApi must stay up so users can browse history /
+                // recap UI even with the game closed.
+                LogPipelineExhausted(logger, this.options.ConnectRetry.MaxAttempts, ex);
+                await SafeDelayAsync(this.options.ConnectRetry.MaxDelay, stoppingToken);
             }
             catch (IOException ex)
             {
-                LogRetriesExhausted(logger, this.options.ConnectRetry.MaxAttempts, ex);
-                lifetime.StopApplication();
-                return;
+                LogPipelineExhausted(logger, this.options.ConnectRetry.MaxAttempts, ex);
+                await SafeDelayAsync(this.options.ConnectRetry.MaxDelay, stoppingToken);
             }
 
             // RunAsync returned (clean EOF). Honour cancellation immediately rather than re-entering
@@ -80,6 +79,18 @@ internal sealed class StatsApiListenerService(
             }
 
             LogDisconnected(logger, null);
+        }
+    }
+
+    private static async Task SafeDelayAsync(TimeSpan delay, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(delay, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation during the cooldown is fine — outer loop re-checks the token next pass.
         }
     }
 

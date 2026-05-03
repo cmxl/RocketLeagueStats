@@ -41,6 +41,12 @@ export interface MatchSummary {
   mvp: PlayerRef | null;
   totalGoals: number;
   fastestGoal: Goal | null;
+  // Populated from the Matches row that the writer fills at MatchEnded with the latest
+  // snapshot's team metadata. Null on rows persisted before migration
+  // AddTeamMetadataAndPlayerStats — the recap UI should fall back to its default palette.
+  blueTeam: TeamMeta | null;
+  orangeTeam: TeamMeta | null;
+  arenaName: string | null;
 }
 
 export interface GameFlow {

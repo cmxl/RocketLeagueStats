@@ -104,7 +104,26 @@ export const LiveMatchStore = signalStore(
         // Roster grew mid-match (server discovered a new player from a goal/statfeed event).
         // Patch only the header — preserve scores, feeds, clocks, and overlays.
         hub.onRosterUpdated((h) => patchState(store, { currentMatch: h }));
-        hub.onMatchEnded((sum: MatchSummary) => toast.showMatchEndedToast(sum));
+        // Reset the live UI to its idle baseline once a match concludes. The server's
+        // OnPhaseChanged(idle) broadcast handles the phase transition, but currentMatch /
+        // clockSeconds / playerStats / goals / statfeeds / scores stay populated otherwise —
+        // and any post-game wire chatter (e.g. a stray training tick) would render against
+        // the just-ended match's roster, looking like the match is still live. The toast
+        // still fires first so the user sees the end-of-match summary before the panel clears.
+        hub.onMatchEnded((sum: MatchSummary) => {
+          toast.showMatchEndedToast(sum);
+          patchState(store, {
+            currentMatch: null,
+            clockSeconds: null,
+            blueScore: 0,
+            orangeScore: 0,
+            playerStats: [],
+            goals: [],
+            statfeeds: [],
+            lastGoalAt: null,
+            pendingGoalOverlay: null,
+          });
+        });
         hub.onReconnected(() => store.refreshFromServer());
 
         store.refreshFromServer();

@@ -59,7 +59,6 @@ public class EndToEndIntegrationTests
             new StatsApiListenerService(
                 sp.GetRequiredService<IStatsApiClient>(),
                 sp.GetRequiredService<IOptions<StatsApiOptions>>(),
-                sp.GetRequiredService<IHostApplicationLifetime>(),
                 sp.GetRequiredService<ILogger<StatsApiListenerService>>()));
 
         using var host = builder.Build();

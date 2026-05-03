@@ -99,7 +99,12 @@ internal sealed partial class LiveMatchProjector(
             return;
         }
 
-        var matchId = Guid.NewGuid().ToString();
+        // Use the wire's MatchGuid directly as our MatchId. This is the same key under which the
+        // SqliteEventStoreService persists rows, so the live UI's recap link
+        // (/api/matches/{matchId}) resolves cleanly once the writer flushes the closing batch.
+        // Until commit c2c2dc3 we minted a synthetic Guid here, which 404'd whenever a user clicked
+        // "show recap" from the live view because DB-backed history is keyed by wire MatchGuid.
+        var matchId = evt.MatchGuid;
         this.currentMatchId = matchId;
         this.currentClockSeconds = 0;
         this.lastGoalTimestamp = null;
@@ -321,6 +326,16 @@ internal sealed partial class LiveMatchProjector(
 
     private async Task HandleClockAsync(ClockUpdatedSecondsEvent evt)
     {
+        // Gate identical to HandleGoalAsync / HandleStatfeedAsync / HandleSnapshotAsync. Without
+        // it, training / free-play / private-match clock ticks (which the wire emits with an empty
+        // MatchGuid that the bus-read filter already drops at MatchInitialized time) would still
+        // reach this handler — and broadcasting OnClockTick during training looks to the user like
+        // a phantom live match has started. By project policy offline modes drive zero live UI.
+        if (this.currentMatchId is null)
+        {
+            return;
+        }
+
         this.currentClockSeconds = evt.TimeSeconds;
         state.UpdateClock(evt.TimeSeconds);
         if (evt.TimeSeconds != this.lastBroadcastClockSeconds)

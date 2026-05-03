@@ -42,7 +42,7 @@ import { KmhPipe } from '../../shared/pipes/kmh.pipe';
               <td>{{ row.demosInflicted }}</td>
               <td>{{ row.demosTaken }}</td>
               <td>{{ row.fastestGoalSpeedUuPerSec | kmh }}</td>
-              <td class="score-cell">{{ row.mvpScore }}</td>
+              <td class="score-cell">{{ scoreFor(row) }}</td>
             </tr>
           }
         </tbody>
@@ -80,4 +80,12 @@ export class PlayerStatsTableComponent {
       return b.mvpScore - a.mvpScore;
     }),
   );
+
+  // Prefer the wire's authoritative Score (from PlayerMatchStats — populated at MatchEnded time
+  // by the SQLite writer). Falls back to the synthetic MvpScore for pre-#1 recaps where
+  // PlayerMatchStats didn't exist yet, so the Score column never goes empty for legacy matches.
+  // The MVP highlight + sort still uses MvpScore internally — that ranking is independent.
+  protected scoreFor(row: PlayerStatsRow): number {
+    return row.score > 0 ? row.score : row.mvpScore;
+  }
 }

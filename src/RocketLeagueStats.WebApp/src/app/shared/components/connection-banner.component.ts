@@ -14,11 +14,10 @@ import { StatsHubClient } from '../../core/api/stats-hub.client';
     }
   `,
   styles: [`
+    /* Sits in document flow between nav-bar and main content (see app.html). Keeps the nav menu
+       visible at all times — earlier we used position:fixed top:0 which overlaid the nav and
+       hid the navigation links whenever a connection issue surfaced. */
     .connection-banner {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
       height: 32px;
       display: flex;
       align-items: center;
@@ -28,8 +27,7 @@ import { StatsHubClient } from '../../core/api/stats-hub.client';
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      z-index: 1000;
-      animation: rls-slide-down 300ms ease;
+      animation: rls-fade-in 200ms ease;
     }
     .connection-banner--disconnected {
       background: var(--accent-danger);

@@ -51,8 +51,6 @@ export class HistoryViewComponent {
   protected readonly matches = httpResource<MatchSummary[]>(() => ({
     url: '/api/matches',
     params: {
-      includeTraining: String(this.store.filter().includeTraining),
-      includeFreePlay: String(this.store.filter().includeFreePlay),
       sort: this.store.filter().sort,
     },
   }));

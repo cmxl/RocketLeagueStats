@@ -164,6 +164,162 @@ public sealed class MatchHistoryReaderTests : IAsyncLifetime, IDisposable
         Assert.Equal(1, recap.Goals[0].BlueScoreAfter);
     }
 
+    [Fact]
+    public async Task GetMatchesAsync_returns_team_metadata_and_arena_from_persisted_columns()
+    {
+        await using var seedCtx = this.CreateDbContext();
+        seedCtx.Matches.Add(new Match
+        {
+            MatchGuid = "MT-WITH-META",
+            FirstSeenAtUtc = 1_000_000,
+            EndedAtUtc = 1_300_000,
+            LastEventAtUtc = 1_300_000,
+            BlueTeamName = "BLUE",
+            BlueColorPrimary = "1873FF",
+            BlueColorSecondary = "0F3D8A",
+            OrangeTeamName = "ORANGE",
+            OrangeColorPrimary = "F08020",
+            OrangeColorSecondary = "8A4015",
+            Arena = "DFH Stadium",
+        });
+        await seedCtx.SaveChangesAsync();
+
+        await using var ctx = this.CreateDbContext();
+        var reader = new MatchHistoryReader(ctx);
+
+        var result = await reader.GetMatchesAsync(HistoryFilter.Default, CancellationToken.None);
+
+        var summary = Assert.Single(result);
+        Assert.NotNull(summary.BlueTeam);
+        Assert.Equal("BLUE", summary.BlueTeam!.Name);
+        Assert.Equal("1873FF", summary.BlueTeam.ColorPrimary);
+        Assert.Equal("0F3D8A", summary.BlueTeam.ColorSecondary);
+        Assert.NotNull(summary.OrangeTeam);
+        Assert.Equal("F08020", summary.OrangeTeam!.ColorPrimary);
+        Assert.Equal("DFH Stadium", summary.ArenaName);
+    }
+
+    [Fact]
+    public async Task GetMatchesAsync_returns_null_team_metadata_for_legacy_rows_without_columns()
+    {
+        // Pre-migration AddTeamMetadataAndPlayerStats rows have all the new columns NULL — the
+        // reader must surface that as null TeamDto so the frontend falls back to its default
+        // palette instead of rendering empty-string color names.
+        await using var seedCtx = this.CreateDbContext();
+        seedCtx.Matches.Add(new Match
+        {
+            MatchGuid = "MT-LEGACY",
+            FirstSeenAtUtc = 1_000_000,
+            EndedAtUtc = 1_300_000,
+            LastEventAtUtc = 1_300_000,
+            // No team metadata set — simulates a row written before migration landed.
+        });
+        await seedCtx.SaveChangesAsync();
+
+        await using var ctx = this.CreateDbContext();
+        var reader = new MatchHistoryReader(ctx);
+
+        var result = await reader.GetMatchesAsync(HistoryFilter.Default, CancellationToken.None);
+
+        var summary = Assert.Single(result);
+        Assert.Null(summary.BlueTeam);
+        Assert.Null(summary.OrangeTeam);
+        Assert.Null(summary.ArenaName);
+    }
+
+    [Fact]
+    public async Task GetRecapAsync_overlays_persisted_player_stats_and_surfaces_platform()
+    {
+        // PlayerMatchStats persists the wire's authoritative scoreboard at MatchEnded. The recap
+        // reader must overlay those onto the event-derived aggregator output so the UI shows the
+        // same numbers RL itself reported — and use Platform from PlayerMatchStats since
+        // EventParticipants doesn't carry it.
+        await using var seedCtx = this.CreateDbContext();
+        seedCtx.Matches.Add(new Match
+        {
+            MatchGuid = "MS-WITH-STATS",
+            FirstSeenAtUtc = 1_000_000,
+            EndedAtUtc = 1_300_000,
+            LastEventAtUtc = 1_300_000,
+        });
+        AddGoal(seedCtx, "MS-WITH-STATS", 1_100_000, scorerName: "Tobi", scorerTeamNum: 0, goalSpeed: 1500, goalTime: 30);
+        seedCtx.PlayerMatchStats.Add(new PlayerMatchStats
+        {
+            MatchGuid = "MS-WITH-STATS",
+            Shortcut = 1,
+            PlayerName = "Tobi",
+            TeamNum = 0,
+            Platform = "Steam",
+            Score = 540,
+            Goals = 3,
+            Assists = 2,
+            Saves = 4,
+            Shots = 7,
+            Touches = 42,
+        });
+        await seedCtx.SaveChangesAsync();
+
+        await using var ctx = this.CreateDbContext();
+        var reader = new MatchHistoryReader(ctx);
+
+        var recap = await reader.GetRecapAsync("MS-WITH-STATS", CancellationToken.None);
+
+        Assert.NotNull(recap);
+        var tobi = Assert.Single(recap!.PlayerStats);
+        Assert.Equal(540, tobi.Score);
+        Assert.Equal(3, tobi.Goals);
+        Assert.Equal(2, tobi.Assists);
+        Assert.Equal(4, tobi.Saves);
+        Assert.Equal(7, tobi.Shots);
+        Assert.Equal(42, tobi.Touches);
+        Assert.Equal("Steam", tobi.Player.Platform);
+    }
+
+    [Fact]
+    public async Task GetRecapAsync_keeps_event_derived_stats_when_no_persisted_player_stats()
+    {
+        // Pre-migration matches have no PlayerMatchStats rows but DO have EventParticipants
+        // (which the writer has populated since v1). The reader must keep the aggregator's
+        // event-derived values (and empty Platform) for those — never silently zero them out.
+        await using var seedCtx = this.CreateDbContext();
+        seedCtx.Matches.Add(new Match
+        {
+            MatchGuid = "MS-LEGACY",
+            FirstSeenAtUtc = 1_000_000,
+            EndedAtUtc = 1_300_000,
+            LastEventAtUtc = 1_300_000,
+        });
+        AddGoal(seedCtx, "MS-LEGACY", 1_100_000, scorerName: "Tobi", scorerTeamNum: 0, goalSpeed: 1500, goalTime: 30);
+        await seedCtx.SaveChangesAsync();
+
+        // Seed the EventParticipant for the goal we just inserted — production writes both, but
+        // AddGoal only writes the event row to keep the helper minimal.
+        await using var partCtx = this.CreateDbContext();
+        var goalEvent = await partCtx.Events.FirstAsync(e => e.MatchGuid == "MS-LEGACY");
+        partCtx.EventParticipants.Add(new EventParticipant
+        {
+            EventId = goalEvent.Id,
+            MatchGuid = "MS-LEGACY",
+            PlayerName = "Tobi",
+            Shortcut = 1,
+            TeamNum = 0,
+            Role = ParticipantRoles.Scorer,
+            TimestampUtc = 1_100_000,
+        });
+        await partCtx.SaveChangesAsync();
+
+        await using var ctx = this.CreateDbContext();
+        var reader = new MatchHistoryReader(ctx);
+
+        var recap = await reader.GetRecapAsync("MS-LEGACY", CancellationToken.None);
+
+        Assert.NotNull(recap);
+        var tobi = Assert.Single(recap!.PlayerStats);
+        Assert.Equal(1, tobi.Goals);  // event-derived from the AddGoal call above
+        Assert.Equal(0, tobi.Score);  // no persisted Score; aggregator fallback is 0
+        Assert.Equal(string.Empty, tobi.Player.Platform);
+    }
+
     private static void AddGoal(
         StatsDbContext ctx,
         string matchGuid,

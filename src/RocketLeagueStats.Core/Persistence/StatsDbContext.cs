@@ -14,6 +14,8 @@ public sealed class StatsDbContext(DbContextOptions<StatsDbContext> options) : D
 
     public DbSet<EventParticipant> EventParticipants => this.Set<EventParticipant>();
 
+    public DbSet<PlayerMatchStats> PlayerMatchStats => this.Set<PlayerMatchStats>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Match>(b =>
@@ -21,6 +23,15 @@ public sealed class StatsDbContext(DbContextOptions<StatsDbContext> options) : D
             b.ToTable("Matches");
             b.HasKey(x => x.MatchGuid);
             b.Property(x => x.MatchGuid).HasMaxLength(64);
+            // Color values are 6-digit hex without leading '#' (10 chars is generous slack for
+            // sponsor-branded matches that might use longer descriptors). Names are short.
+            b.Property(x => x.BlueTeamName).HasMaxLength(64);
+            b.Property(x => x.BlueColorPrimary).HasMaxLength(16);
+            b.Property(x => x.BlueColorSecondary).HasMaxLength(16);
+            b.Property(x => x.OrangeTeamName).HasMaxLength(64);
+            b.Property(x => x.OrangeColorPrimary).HasMaxLength(16);
+            b.Property(x => x.OrangeColorSecondary).HasMaxLength(16);
+            b.Property(x => x.Arena).HasMaxLength(64);
             b.HasIndex(x => x.EndedAtUtc)
                 .IsDescending()
                 .HasDatabaseName("IX_Matches_EndedAtUtc");
@@ -80,6 +91,24 @@ public sealed class StatsDbContext(DbContextOptions<StatsDbContext> options) : D
             b.HasOne<EventRecord>()
                 .WithMany()
                 .HasForeignKey(x => x.EventId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PlayerMatchStats>(b =>
+        {
+            b.ToTable("PlayerMatchStats");
+            // Composite PK on (MatchGuid, Shortcut) — Shortcut is RL's stable per-player id within
+            // a match. Cascade-delete from Match so removing a match drops its per-player rows too.
+            b.HasKey(x => new { x.MatchGuid, x.Shortcut });
+            b.Property(x => x.MatchGuid).HasMaxLength(64).IsRequired();
+            b.Property(x => x.PlayerName).HasMaxLength(128).IsRequired();
+            b.Property(x => x.Platform).HasMaxLength(32).IsRequired();
+            b.HasIndex(x => x.PlayerName)
+                .HasDatabaseName("IX_PlayerMatchStats_PlayerName");
+            b.HasOne<Match>()
+                .WithMany()
+                .HasForeignKey(x => x.MatchGuid)
+                .HasPrincipalKey(m => m.MatchGuid)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

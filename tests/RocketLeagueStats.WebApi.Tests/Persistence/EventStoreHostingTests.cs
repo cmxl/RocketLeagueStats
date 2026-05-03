@@ -31,9 +31,9 @@ public sealed class EventStoreHostingTests : IDisposable
         await using var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync();
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('Matches','Events','MatchSnapshots','EventParticipants');";
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('Matches','Events','MatchSnapshots','EventParticipants','PlayerMatchStats');";
         var tableCount = (long)(await cmd.ExecuteScalarAsync())!;
-        Assert.Equal(4L, tableCount);
+        Assert.Equal(5L, tableCount);
     }
 
     public void Dispose()

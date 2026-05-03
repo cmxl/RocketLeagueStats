@@ -360,6 +360,124 @@ public sealed class SqliteEventStoreServiceTests : IAsyncLifetime, IDisposable
         Assert.Equal("real-match", stored.MatchGuid);
     }
 
+    [Fact]
+    public async Task MatchEnded_WithPriorSnapshot_PersistsTeamMetadataAndPlayerMatchStats()
+    {
+        // Wire path: snapshot ticks at ~30Hz throughout the match → MatchEnded fires once at the end.
+        // The writer must capture the latest snapshot's team metadata + per-player stats and persist
+        // them with the Match row + a PlayerMatchStats row per player at MatchEnded time.
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 8, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+        await Task.Delay(100, cts.Token);
+
+        using var snapshotJson = System.Text.Json.JsonDocument.Parse("""
+            {
+              "MatchGuid": "ended-with-meta",
+              "Players": [
+                { "Name": "Tobi", "PrimaryId": "Steam|76561198|0", "Shortcut": 1, "TeamNum": 0,
+                  "Score": 540, "Goals": 3, "Assists": 2, "Saves": 4, "Shots": 7, "Touches": 42 },
+                { "Name": "Vex", "PrimaryId": "Epic|abc123|0", "Shortcut": 2, "TeamNum": 1,
+                  "Score": 320, "Goals": 1, "Assists": 1, "Saves": 2, "Shots": 4, "Touches": 28 }
+              ],
+              "Game": {
+                "Arena": "DFH Stadium",
+                "Teams": [
+                  { "Name": "BLUE", "TeamNum": 0, "ColorPrimary": "1873FF", "ColorSecondary": "0F3D8A" },
+                  { "Name": "ORANGE", "TeamNum": 1, "ColorPrimary": "F08020", "ColorSecondary": "8A4015" }
+                ]
+              }
+            }
+            """);
+
+        bus.Publish(new MatchInitializedEvent
+        {
+            EventName = KnownEvents.MatchInitialized,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(10),
+            MatchGuid = "ended-with-meta",
+        });
+        bus.Publish(new MatchStateSnapshot
+        {
+            EventName = KnownEvents.UpdateState,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(60),
+            MatchGuid = "ended-with-meta",
+            RawData = snapshotJson.RootElement.Clone(),
+        });
+        bus.Publish(new MatchEndedEvent
+        {
+            EventName = KnownEvents.MatchEnded,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(120),
+            MatchGuid = "ended-with-meta",
+            WinnerTeamNum = 0,
+        });
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.PlayerMatchStats.CountAsync(), expected: 2, cts.Token);
+        await service.StopAsync(CancellationToken.None);
+
+        await using var ctx = this.fixture.CreateDbContext();
+        var match = await ctx.Matches.SingleAsync(m => m.MatchGuid == "ended-with-meta");
+        Assert.Equal("BLUE", match.BlueTeamName);
+        Assert.Equal("1873FF", match.BlueColorPrimary);
+        Assert.Equal("ORANGE", match.OrangeTeamName);
+        Assert.Equal("F08020", match.OrangeColorPrimary);
+        Assert.Equal("DFH Stadium", match.Arena);
+
+        var statsByName = await ctx.PlayerMatchStats
+            .Where(p => p.MatchGuid == "ended-with-meta")
+            .ToDictionaryAsync(p => p.PlayerName, cts.Token);
+        Assert.Equal(2, statsByName.Count);
+        Assert.Equal(540, statsByName["Tobi"].Score);
+        Assert.Equal("Steam", statsByName["Tobi"].Platform);
+        Assert.Equal(3, statsByName["Tobi"].Goals);
+        Assert.Equal(42, statsByName["Tobi"].Touches);
+        Assert.Equal("Epic", statsByName["Vex"].Platform);
+        Assert.Equal(320, statsByName["Vex"].Score);
+    }
+
+    [Fact]
+    public async Task MatchEnded_WithoutAnySnapshot_PersistsMatchWithoutTeamMetadata()
+    {
+        // Edge case: a match ends before any snapshot has been seen for it (e.g., wire blip).
+        // The writer must still persist the Match row — just without team metadata or
+        // PlayerMatchStats — instead of crashing or skipping the match entirely.
+        using var bus = new StatsEventBus(NullLogger<StatsEventBus>.Instance);
+        var options = Options.Create(new EventStoreOptions { MaxBatchSize = 4, MaxBatchLatencyMs = 50 });
+        var service = this.CreateService(bus, options);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await service.StartAsync(cts.Token);
+        await Task.Delay(100, cts.Token);
+
+        bus.Publish(new MatchInitializedEvent
+        {
+            EventName = KnownEvents.MatchInitialized,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(10),
+            MatchGuid = "ended-no-snap",
+        });
+        bus.Publish(new MatchEndedEvent
+        {
+            EventName = KnownEvents.MatchEnded,
+            Timestamp = DateTimeOffset.UnixEpoch.AddSeconds(120),
+            MatchGuid = "ended-no-snap",
+            WinnerTeamNum = 0,
+        });
+
+        await WaitForRowCountAsync(this.fixture, ctx => ctx.Matches.CountAsync(m => m.MatchGuid == "ended-no-snap"), expected: 1, cts.Token);
+        await Task.Delay(200, cts.Token);   // Let the latency-flush settle in case PlayerMatchStats inserts trail Matches.
+        await service.StopAsync(CancellationToken.None);
+
+        await using var ctx = this.fixture.CreateDbContext();
+        var match = await ctx.Matches.SingleAsync(m => m.MatchGuid == "ended-no-snap");
+        Assert.Null(match.BlueTeamName);
+        Assert.Null(match.OrangeTeamName);
+        Assert.Null(match.Arena);
+        Assert.Equal(120_000L, match.EndedAtUtc);
+        Assert.Equal(0, await ctx.PlayerMatchStats.CountAsync(p => p.MatchGuid == "ended-no-snap"));
+    }
+
     private SqliteEventStoreService CreateService(StatsEventBus bus, IOptions<EventStoreOptions> options) =>
         new(
             bus,

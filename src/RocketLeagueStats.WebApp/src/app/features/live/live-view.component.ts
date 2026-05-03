@@ -72,10 +72,18 @@ export class LiveViewComponent {
       : this.live.currentMatch()?.orangePlayers;
 
     if (!roster || roster.length === 0) {
-      return stats.filter(p => p.player.team === team);
+      return [...stats.filter(p => p.player.team === team)].sort(byScoreDesc);
     }
 
-    return roster.map(p => stats.find(s => s.player.shortcut === p.shortcut) ?? emptyRow(p));
+    // Mirror the in-game scoreboard: highest-scoring player at the top of each team column.
+    // Score comes from the wire's MatchStateSnapshot via SnapshotPlayer.Score (same field that
+    // backs the Score column in the recap player-stats table). During the brief window between
+    // MatchInitialized and the first snapshot tick every entry has score=0, so the comparator
+    // is effectively a no-op then and roster order wins — which keeps the UI from flickering
+    // between renders while waiting for real values.
+    return roster
+      .map(p => stats.find(s => s.player.shortcut === p.shortcut) ?? emptyRow(p))
+      .sort(byScoreDesc);
   }
 }
 
@@ -96,4 +104,12 @@ function emptyRow(player: PlayerRef): PlayerStatsRow {
     score: 0,
     touches: 0,
   };
+}
+
+// Stable sort by score DESC. Array.prototype.sort isn't guaranteed stable across all engines
+// per the spec, but is stable in V8/SpiderMonkey/JavaScriptCore as of ES2019 — which covers
+// every browser this app ships against. Equal scores keep the roster's emission order, so
+// the column doesn't visually scramble during the all-zero pre-snapshot window.
+function byScoreDesc(a: PlayerStatsRow, b: PlayerStatsRow): number {
+  return b.score - a.score;
 }

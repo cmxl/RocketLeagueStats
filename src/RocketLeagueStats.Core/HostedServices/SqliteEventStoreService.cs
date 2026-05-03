@@ -45,6 +45,14 @@ internal sealed class SqliteEventStoreService(
 
     private readonly string connectionString = connectionString.Value;
 
+    // Carries the most-recent MatchStateSnapshotData per active match across batches. We need it
+    // at MatchEnded time to populate the Match row's team metadata + arena + the PlayerMatchStats
+    // rows — Rocket League's wire never re-sends those once the match is over, so we have to
+    // capture them while the match is in progress. Bounded by the number of concurrently-active
+    // matches (effectively 1 in single-client usage); cleared per match when MatchEnded fires.
+    private readonly Dictionary<string, MatchStateSnapshotData> latestSnapshotByMatch =
+        new(StringComparer.Ordinal);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!this.options.Enabled)
@@ -59,6 +67,7 @@ internal sealed class SqliteEventStoreService(
         var maxLatency = TimeSpan.FromMilliseconds(this.options.MaxBatchLatencyMs);
         var buffer = new List<StatsEvent>(capacity: this.options.MaxBatchSize);
         var lastFlushAt = DateTime.UtcNow;
+        var hasTerminalEvent = false;
 
         try
         {
@@ -91,6 +100,18 @@ internal sealed class SqliteEventStoreService(
                             }
 
                             buffer.Add(evt);
+
+                            // MatchEnded / MatchDestroyed signal a match concluding. Force a flush
+                            // so the recap row is persisted before the user's "show recap" click
+                            // hits the read endpoint. Without this, the next flush is up to
+                            // MaxBatchLatencyMs (250ms default) away and a fast click 404s. The
+                            // live projector emits OnMatchEnded over SignalR on the same bus tick,
+                            // so the user can act on the toast immediately — the writer has to
+                            // catch up just as fast.
+                            if (evt is MatchEndedEvent or MatchDestroyedEvent)
+                            {
+                                hasTerminalEvent = true;
+                            }
                         }
                     }
                 }
@@ -101,8 +122,9 @@ internal sealed class SqliteEventStoreService(
 
                 var shouldFlushBySize = buffer.Count >= this.options.MaxBatchSize;
                 var shouldFlushByLatency = (DateTime.UtcNow - lastFlushAt) >= maxLatency && buffer.Count > 0;
+                var shouldFlushByTerminal = hasTerminalEvent && buffer.Count > 0;
 
-                if (shouldFlushBySize || shouldFlushByLatency)
+                if (shouldFlushBySize || shouldFlushByLatency || shouldFlushByTerminal)
                 {
                     try
                     {
@@ -116,6 +138,7 @@ internal sealed class SqliteEventStoreService(
                     {
                         buffer.Clear();
                         lastFlushAt = DateTime.UtcNow;
+                        hasTerminalEvent = false;
                     }
                 }
             }
@@ -203,20 +226,33 @@ internal sealed class SqliteEventStoreService(
         //   in arrival order if multiple subscribers race.
         // - Lifecycle timestamps + WinnerTeamNum: COALESCE keeps the FIRST non-null value seen.
         //   This means if MatchEnded fires twice (which it shouldn't), the original WinnerTeamNum wins.
+        // - Team metadata + arena: COALESCE-preserved too, but only sent at MatchEnded — every
+        //   in-progress upsert passes NULL so the existing values aren't disturbed mid-match.
         upsertMatch.CommandText = """
             INSERT INTO Matches (MatchGuid, FirstSeenAtUtc, EventCount, SnapshotCount, LastEventAtUtc,
-                                  CreatedAtUtc, InitializedAtUtc, EndedAtUtc, DestroyedAtUtc, WinnerTeamNum)
+                                  CreatedAtUtc, InitializedAtUtc, EndedAtUtc, DestroyedAtUtc, WinnerTeamNum,
+                                  BlueTeamName, BlueColorPrimary, BlueColorSecondary,
+                                  OrangeTeamName, OrangeColorPrimary, OrangeColorSecondary, Arena)
             VALUES ($matchGuid, $firstSeen, $eventDelta, $snapshotDelta, $lastTs,
-                    $created, $initialized, $ended, $destroyed, $winner)
+                    $created, $initialized, $ended, $destroyed, $winner,
+                    $blueName, $bluePrimary, $blueSecondary,
+                    $orangeName, $orangePrimary, $orangeSecondary, $arena)
             ON CONFLICT(MatchGuid) DO UPDATE SET
                 EventCount     = EventCount + excluded.EventCount,
                 SnapshotCount  = SnapshotCount + excluded.SnapshotCount,
                 LastEventAtUtc = MAX(LastEventAtUtc, excluded.LastEventAtUtc),
-                CreatedAtUtc     = COALESCE(CreatedAtUtc,     excluded.CreatedAtUtc),
-                InitializedAtUtc = COALESCE(InitializedAtUtc, excluded.InitializedAtUtc),
-                EndedAtUtc       = COALESCE(EndedAtUtc,       excluded.EndedAtUtc),
-                DestroyedAtUtc   = COALESCE(DestroyedAtUtc,   excluded.DestroyedAtUtc),
-                WinnerTeamNum    = COALESCE(WinnerTeamNum,    excluded.WinnerTeamNum);
+                CreatedAtUtc        = COALESCE(CreatedAtUtc,        excluded.CreatedAtUtc),
+                InitializedAtUtc    = COALESCE(InitializedAtUtc,    excluded.InitializedAtUtc),
+                EndedAtUtc          = COALESCE(EndedAtUtc,          excluded.EndedAtUtc),
+                DestroyedAtUtc      = COALESCE(DestroyedAtUtc,      excluded.DestroyedAtUtc),
+                WinnerTeamNum       = COALESCE(WinnerTeamNum,       excluded.WinnerTeamNum),
+                BlueTeamName         = COALESCE(BlueTeamName,         excluded.BlueTeamName),
+                BlueColorPrimary     = COALESCE(BlueColorPrimary,     excluded.BlueColorPrimary),
+                BlueColorSecondary   = COALESCE(BlueColorSecondary,   excluded.BlueColorSecondary),
+                OrangeTeamName       = COALESCE(OrangeTeamName,       excluded.OrangeTeamName),
+                OrangeColorPrimary   = COALESCE(OrangeColorPrimary,   excluded.OrangeColorPrimary),
+                OrangeColorSecondary = COALESCE(OrangeColorSecondary, excluded.OrangeColorSecondary),
+                Arena                = COALESCE(Arena,                excluded.Arena);
             """;
         var umMatchGuid = upsertMatch.Parameters.Add("$matchGuid", SqliteType.Text);
         var umFirstSeen = upsertMatch.Parameters.Add("$firstSeen", SqliteType.Integer);
@@ -228,8 +264,50 @@ internal sealed class SqliteEventStoreService(
         var umEnded = upsertMatch.Parameters.Add("$ended", SqliteType.Integer);
         var umDestroyed = upsertMatch.Parameters.Add("$destroyed", SqliteType.Integer);
         var umWinner = upsertMatch.Parameters.Add("$winner", SqliteType.Integer);
+        var umBlueName = upsertMatch.Parameters.Add("$blueName", SqliteType.Text);
+        var umBluePrimary = upsertMatch.Parameters.Add("$bluePrimary", SqliteType.Text);
+        var umBlueSecondary = upsertMatch.Parameters.Add("$blueSecondary", SqliteType.Text);
+        var umOrangeName = upsertMatch.Parameters.Add("$orangeName", SqliteType.Text);
+        var umOrangePrimary = upsertMatch.Parameters.Add("$orangePrimary", SqliteType.Text);
+        var umOrangeSecondary = upsertMatch.Parameters.Add("$orangeSecondary", SqliteType.Text);
+        var umArena = upsertMatch.Parameters.Add("$arena", SqliteType.Text);
+
+        await using var upsertPlayerStats = connection.CreateCommand();
+        upsertPlayerStats.Transaction = tx;
+        // INSERT … ON CONFLICT(MatchGuid, Shortcut) DO UPDATE — defensive idempotency in case
+        // MatchEnded fires twice for the same match (shouldn't happen, but the wire occasionally
+        // double-fires lifecycle events). Subsequent calls overwrite with the most recent
+        // snapshot's values, which is what we want — final scoreboard wins.
+        upsertPlayerStats.CommandText = """
+            INSERT INTO PlayerMatchStats
+                (MatchGuid, Shortcut, PlayerName, TeamNum, Platform, Score, Goals, Assists, Saves, Shots, Touches)
+            VALUES
+                ($matchGuid, $shortcut, $playerName, $teamNum, $platform, $score, $goals, $assists, $saves, $shots, $touches)
+            ON CONFLICT(MatchGuid, Shortcut) DO UPDATE SET
+                PlayerName = excluded.PlayerName,
+                TeamNum    = excluded.TeamNum,
+                Platform   = excluded.Platform,
+                Score      = excluded.Score,
+                Goals      = excluded.Goals,
+                Assists    = excluded.Assists,
+                Saves      = excluded.Saves,
+                Shots      = excluded.Shots,
+                Touches    = excluded.Touches;
+            """;
+        var psMatchGuid = upsertPlayerStats.Parameters.Add("$matchGuid", SqliteType.Text);
+        var psShortcut = upsertPlayerStats.Parameters.Add("$shortcut", SqliteType.Integer);
+        var psPlayerName = upsertPlayerStats.Parameters.Add("$playerName", SqliteType.Text);
+        var psTeamNum = upsertPlayerStats.Parameters.Add("$teamNum", SqliteType.Integer);
+        var psPlatform = upsertPlayerStats.Parameters.Add("$platform", SqliteType.Text);
+        var psScore = upsertPlayerStats.Parameters.Add("$score", SqliteType.Integer);
+        var psGoals = upsertPlayerStats.Parameters.Add("$goals", SqliteType.Integer);
+        var psAssists = upsertPlayerStats.Parameters.Add("$assists", SqliteType.Integer);
+        var psSaves = upsertPlayerStats.Parameters.Add("$saves", SqliteType.Integer);
+        var psShots = upsertPlayerStats.Parameters.Add("$shots", SqliteType.Integer);
+        var psTouches = upsertPlayerStats.Parameters.Add("$touches", SqliteType.Integer);
 
         var matchAggregates = new Dictionary<string, MatchAggregate>(StringComparer.Ordinal);
+        var matchesEndingInThisBatch = new HashSet<string>(StringComparer.Ordinal);
         foreach (var evt in batch)
         {
             if (evt.MatchGuid is null)
@@ -243,9 +321,18 @@ internal sealed class SqliteEventStoreService(
                 agg = new MatchAggregate(ts);
             }
 
-            if (evt is MatchStateSnapshot)
+            if (evt is MatchStateSnapshot snap)
             {
                 agg = agg with { SnapshotDelta = agg.SnapshotDelta + 1, LastTs = Math.Max(agg.LastTs, ts) };
+
+                // Capture the parsed snapshot data so we can pull team metadata + per-player
+                // wire stats out of it when the match ends. Multiple snapshots within a single
+                // batch will overwrite — last-one-wins is what we want, since we just want the
+                // most recent state at MatchEnded time.
+                if (MatchStateSnapshotData.TryParse(snap.RawData, out var snapData) && snapData is not null)
+                {
+                    this.latestSnapshotByMatch[evt.MatchGuid] = snapData;
+                }
             }
             else
             {
@@ -260,6 +347,14 @@ internal sealed class SqliteEventStoreService(
                 MatchDestroyedEvent => agg with { Destroyed = agg.Destroyed ?? ts },
                 _ => agg,
             };
+
+            // Treat both MatchEnded (ranked) and MatchDestroyed (training/free-play, or ranked
+            // post-podium) as match-end signals — we want to persist team metadata + per-player
+            // stats whenever the match concludes by either path.
+            if (evt is MatchEndedEvent or MatchDestroyedEvent)
+            {
+                matchesEndingInThisBatch.Add(evt.MatchGuid);
+            }
 
             matchAggregates[evt.MatchGuid] = agg;
         }
@@ -279,7 +374,66 @@ internal sealed class SqliteEventStoreService(
             umEnded.Value = (object?)agg.Ended ?? DBNull.Value;
             umDestroyed.Value = (object?)agg.Destroyed ?? DBNull.Value;
             umWinner.Value = (object?)agg.Winner ?? DBNull.Value;
+
+            // Team metadata + arena are only persisted at match-end. For mid-match upserts we
+            // pass NULL for all seven; the COALESCE in the ON CONFLICT clause keeps the existing
+            // values (which are also NULL the first time, real values at MatchEnded time).
+            var carryTeamMetadata =
+                matchesEndingInThisBatch.Contains(guid)
+                && this.latestSnapshotByMatch.TryGetValue(guid, out var snapForMatch);
+            if (carryTeamMetadata)
+            {
+                var snap = this.latestSnapshotByMatch[guid];
+                var blueTeam = FindTeam(snap.Teams, teamNum: 0);
+                var orangeTeam = FindTeam(snap.Teams, teamNum: 1);
+                umBlueName.Value = (object?)blueTeam?.Name ?? DBNull.Value;
+                umBluePrimary.Value = (object?)blueTeam?.ColorPrimary ?? DBNull.Value;
+                umBlueSecondary.Value = (object?)blueTeam?.ColorSecondary ?? DBNull.Value;
+                umOrangeName.Value = (object?)orangeTeam?.Name ?? DBNull.Value;
+                umOrangePrimary.Value = (object?)orangeTeam?.ColorPrimary ?? DBNull.Value;
+                umOrangeSecondary.Value = (object?)orangeTeam?.ColorSecondary ?? DBNull.Value;
+                umArena.Value = (object?)snap.Arena ?? DBNull.Value;
+            }
+            else
+            {
+                umBlueName.Value = DBNull.Value;
+                umBluePrimary.Value = DBNull.Value;
+                umBlueSecondary.Value = DBNull.Value;
+                umOrangeName.Value = DBNull.Value;
+                umOrangePrimary.Value = DBNull.Value;
+                umOrangeSecondary.Value = DBNull.Value;
+                umArena.Value = DBNull.Value;
+            }
+
             await upsertMatch.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // After Matches rows are upserted, persist PlayerMatchStats for any match that ended in
+        // this batch. PlayerMatchStats.MatchGuid is FK to Matches — that's why we wait until
+        // after the Matches upsert above. Each player gets one row per match (PK is
+        // MatchGuid+Shortcut); the upsert overwrites if a duplicate MatchEnded fires.
+        foreach (var endedGuid in matchesEndingInThisBatch)
+        {
+            if (!this.latestSnapshotByMatch.TryGetValue(endedGuid, out var snap))
+            {
+                continue;
+            }
+
+            foreach (var player in snap.Players)
+            {
+                psMatchGuid.Value = endedGuid;
+                psShortcut.Value = player.Shortcut;
+                psPlayerName.Value = player.Name;
+                psTeamNum.Value = player.TeamNum;
+                psPlatform.Value = player.Platform;
+                psScore.Value = player.Score;
+                psGoals.Value = player.Goals;
+                psAssists.Value = player.Assists;
+                psSaves.Value = player.Saves;
+                psShots.Value = player.Shots;
+                psTouches.Value = player.Touches;
+                await upsertPlayerStats.ExecuteNonQueryAsync(cancellationToken);
+            }
         }
 
         foreach (var evt in batch)
@@ -331,6 +485,28 @@ internal sealed class SqliteEventStoreService(
         }
 
         await tx.CommitAsync(cancellationToken);
+
+        // After a successful commit, drop the in-memory snapshot data for matches that ended.
+        // Without this, the dictionary would keep growing as new matches start without ending
+        // (e.g. process restart mid-match). We deliberately keep entries for in-progress matches
+        // — there might be more snapshots before MatchEnded for those.
+        foreach (var endedGuid in matchesEndingInThisBatch)
+        {
+            this.latestSnapshotByMatch.Remove(endedGuid);
+        }
+    }
+
+    private static SnapshotTeam? FindTeam(IReadOnlyList<SnapshotTeam> teams, int teamNum)
+    {
+        for (var i = 0; i < teams.Count; i++)
+        {
+            if (teams[i].TeamNum == teamNum)
+            {
+                return teams[i];
+            }
+        }
+
+        return null;
     }
 
     private static void ApplyPragmas(SqliteConnection connection)

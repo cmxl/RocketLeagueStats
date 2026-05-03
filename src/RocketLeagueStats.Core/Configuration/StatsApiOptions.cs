@@ -21,10 +21,13 @@ public sealed class StatsApiOptions
         public TimeSpan MaxDelay { get; init; } = TimeSpan.FromSeconds(30);
 
         /// <summary>
-        /// Maximum reconnect attempts before the host exits. With the default 30 attempts and 30s
-        /// max delay, this caps the reconnect storm at ~12 minutes of "Rocket League is closed" before
-        /// the process exits cleanly. Set to <see cref="int.MaxValue"/> to retry forever.
+        /// Maximum reconnect attempts before the listener gives up on the current pipeline run.
+        /// Defaults to <see cref="int.MaxValue"/> so the WebApi keeps trying forever — users
+        /// can browse history / recap UI even when Rocket League isn't running. The listener
+        /// service no longer requests host shutdown when retries exhaust; it logs and re-enters
+        /// the retry pipeline so a (theoretical) burst of upstream errors can't kill the app.
+        /// Lower this only for narrow test scenarios that need bounded retry behaviour.
         /// </summary>
-        public int MaxAttempts { get; init; } = 30;
+        public int MaxAttempts { get; init; } = int.MaxValue;
     }
 }
