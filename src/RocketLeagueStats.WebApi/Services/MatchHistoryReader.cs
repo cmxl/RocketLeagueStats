@@ -270,7 +270,8 @@ internal sealed class MatchHistoryReader(StatsDbContext db)
             FastestGoal: fastestGoal,
             BlueTeam: BuildTeam(match.BlueTeamName, match.BlueColorPrimary, match.BlueColorSecondary),
             OrangeTeam: BuildTeam(match.OrangeTeamName, match.OrangeColorPrimary, match.OrangeColorSecondary),
-            ArenaName: match.Arena);
+            ArenaName: match.Arena,
+            WinnerTeamNum: match.WinnerTeamNum);
     }
 
     private static TeamDto? BuildTeam(string? name, string? primary, string? secondary)

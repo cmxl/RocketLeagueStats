@@ -47,6 +47,11 @@ export interface MatchSummary {
   blueTeam: TeamMeta | null;
   orangeTeam: TeamMeta | null;
   arenaName: string | null;
+  // Mirrors the persisted Match.WinnerTeamNum — 0 = blue won, 1 = orange won, null on
+  // abandoned matches without a MatchEnded event. Used by the history card / recap hero to
+  // colour the configured player's win/loss stripe directly, without re-deriving the winner
+  // from BlueScore vs OrangeScore (overtime can end the moment a goal lands).
+  winnerTeamNum: number | null;
 }
 
 export interface GameFlow {

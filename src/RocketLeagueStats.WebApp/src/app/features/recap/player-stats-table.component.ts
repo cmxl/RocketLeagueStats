@@ -14,15 +14,18 @@ import { KmhPipe } from '../../shared/pipes/kmh.pipe';
         <thead>
           <tr>
             <th>Player</th>
-            <th>G</th>
-            <th>A</th>
-            <th>Sv</th>
-            <th>Sh</th>
-            <th>ESv</th>
-            <th>D</th>
-            <th>DT</th>
-            <th>Best Speed</th>
-            <th>Score</th>
+            <!-- <abbr title=...> attaches a tooltip on hover and is announced by screen readers,
+                 unlike a bare title= on <th>. The dotted underline in user-agent default
+                 styling is suppressed via .stats-table abbr below to keep the header clean. -->
+            <th><abbr title="Goals">G</abbr></th>
+            <th><abbr title="Assists">A</abbr></th>
+            <th><abbr title="Saves">Sv</abbr></th>
+            <th><abbr title="Shots on goal">Sh</abbr></th>
+            <th><abbr title="Epic Saves">ESv</abbr></th>
+            <th><abbr title="Demolitions inflicted">D</abbr></th>
+            <th><abbr title="Demolitions taken">DT</abbr></th>
+            <th><abbr title="Fastest goal speed">Best Speed</abbr></th>
+            <th><abbr title="In-game score (from Rocket League's scoreboard)">Score</abbr></th>
           </tr>
         </thead>
         <tbody>
@@ -42,7 +45,7 @@ import { KmhPipe } from '../../shared/pipes/kmh.pipe';
               <td>{{ row.demosInflicted }}</td>
               <td>{{ row.demosTaken }}</td>
               <td>{{ row.fastestGoalSpeedUuPerSec | kmh }}</td>
-              <td class="score-cell">{{ scoreFor(row) }}</td>
+              <td class="score-cell">{{ row.score }}</td>
             </tr>
           }
         </tbody>
@@ -58,6 +61,14 @@ import { KmhPipe } from '../../shared/pipes/kmh.pipe';
     .stats-table { width: 100%; border-collapse: collapse; font-family: var(--font-body); font-size: var(--text-sm); }
     .stats-table th { font-family: var(--font-header); font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; text-align: center; padding: 0.375rem 0.5rem; border-bottom: 1px solid var(--text-muted); }
     .stats-table th:first-child { text-align: left; }
+    /* Suppress the user-agent dotted underline on <abbr title>. We get the help-cursor from
+       cursor: help instead, which signals discoverability without competing with the table's
+       muted-uppercase header look. */
+    .stats-table abbr {
+      text-decoration: none;
+      cursor: help;
+      border-bottom: 1px dotted color-mix(in srgb, var(--text-muted) 60%, transparent);
+    }
     .stats-table td { padding: 0.375rem 0.5rem; text-align: center; color: var(--text-primary); border-bottom: 1px solid color-mix(in srgb, var(--text-muted) 40%, transparent); vertical-align: middle; line-height: 1.4; }
     .stats-table td:first-child { text-align: left; }
     .row--blue td:first-child { color: var(--team-blue); }
@@ -80,12 +91,4 @@ export class PlayerStatsTableComponent {
       return b.mvpScore - a.mvpScore;
     }),
   );
-
-  // Prefer the wire's authoritative Score (from PlayerMatchStats — populated at MatchEnded time
-  // by the SQLite writer). Falls back to the synthetic MvpScore for pre-#1 recaps where
-  // PlayerMatchStats didn't exist yet, so the Score column never goes empty for legacy matches.
-  // The MVP highlight + sort still uses MvpScore internally — that ranking is independent.
-  protected scoreFor(row: PlayerStatsRow): number {
-    return row.score > 0 ? row.score : row.mvpScore;
-  }
 }
