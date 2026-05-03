@@ -1,0 +1,7 @@
+@host = http://localhost:5000
+
+### Get server build/version info
+# Returns the WebApi assembly version, the build date (mtime of AppContext.BaseDirectory),
+# and the list of feature flags compiled in (currently: live, history, recap, settings).
+GET {{host}}/api/info
+Accept: application/json

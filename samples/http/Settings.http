@@ -1,10 +1,10 @@
 @host = http://localhost:5000
 
-### Get settings (defaults if none saved)
+### Get settings (returns defaults if none have been saved yet)
 GET {{host}}/api/settings
 Accept: application/json
 
-### Save player name + friend list
+### Save player name + friend list + history-filter default
 PUT {{host}}/api/settings
 Content-Type: application/json
 
@@ -12,4 +12,24 @@ Content-Type: application/json
   "playerName": "Hellcat",
   "friendNames": ["Stinkmaster", "Sub"],
   "showTrainingInHistory": false
+}
+
+### Clear player name (highlights nothing in the live view)
+PUT {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "playerName": null,
+  "friendNames": [],
+  "showTrainingInHistory": false
+}
+
+### Show training matches in history by default
+PUT {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "playerName": "Hellcat",
+  "friendNames": ["Stinkmaster", "Sub"],
+  "showTrainingInHistory": true
 }

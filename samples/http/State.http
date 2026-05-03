@@ -1,5 +1,10 @@
 @host = http://localhost:5000
 
-### Get current live state (cold load)
+### Get current live state (cold load — used by the SPA on first paint)
+# This is the snapshot of LiveStateDto the projector currently holds: connection
+# state, current match phase, scoreboard, action feed, possession, etc.
+# For real-time updates use the SignalR hub at {{host}}/hub/stats instead — this
+# endpoint exists so a freshly-loaded page can render immediately without waiting
+# for the next hub broadcast.
 GET {{host}}/api/state
 Accept: application/json

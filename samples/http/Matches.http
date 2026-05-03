@@ -8,14 +8,38 @@ Accept: application/json
 GET {{host}}/api/matches?includeTraining=true
 Accept: application/json
 
-### Sort by highest-scoring
+### Include free-play matches
+GET {{host}}/api/matches?includeFreePlay=true
+Accept: application/json
+
+### Include both training and free-play (everything)
+GET {{host}}/api/matches?includeTraining=true&includeFreePlay=true
+Accept: application/json
+
+### Sort by highest-scoring (also accepts: highest-scoring, highestscoring)
 GET {{host}}/api/matches?sort=highestScoring
 Accept: application/json
 
-### Get a specific recap (200)
+### Date-range filter (UTC ISO-8601)
+GET {{host}}/api/matches?from=2026-04-01T00:00:00Z&to=2026-05-01T00:00:00Z
+Accept: application/json
+
+### Combined filters: tournament + casual + last 7 days, sorted by score
+GET {{host}}/api/matches?includeTraining=false&includeFreePlay=false&from=2026-04-26T00:00:00Z&sort=highestScoring
+Accept: application/json
+
+### Get a specific recap (200 — match exists with snapshot + events persisted)
 GET {{host}}/api/matches/00000000-0000-0000-0000-000000000001
 Accept: application/json
 
 ### Get a non-existent recap (404)
 GET {{host}}/api/matches/no-such-match
 Accept: application/json
+
+### Delete a match by id (204 No Content on success)
+# Removes the Match row, all linked events, and the snapshot from stats.db.
+# Cannot be undone — the dashboard's UI prompts for confirmation; the API does not.
+DELETE {{host}}/api/matches/00000000-0000-0000-0000-000000000001
+
+### Delete a non-existent match (404)
+DELETE {{host}}/api/matches/no-such-match
