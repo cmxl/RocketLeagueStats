@@ -30,11 +30,7 @@
     <ProjectReference Include="..\RocketLeagueStats.Core\RocketLeagueStats.Core.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Remove="wwwroot\**" />
-  </ItemGroup>
-
-  <Target Name="EnsureWebAppBuilt" BeforeTargets="Build" Condition="'$(Configuration)' == 'Release'">
+  <Target Name="EnsureWebAppBuilt" BeforeTargets="Build;Publish" Condition="'$(Configuration)' == 'Release'">
     <Error Condition="!Exists('$(MSBuildProjectDirectory)/wwwroot/index.html')"
            Text="Angular bundle missing at wwwroot/index.html. Run ./tools/Build-WebApp.ps1 before publishing." />
   </Target>

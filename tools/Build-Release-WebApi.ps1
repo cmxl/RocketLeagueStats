@@ -100,6 +100,14 @@ dotnet @publishArgs
 
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)" }
 
+# Sanity check: SWA pipeline regressions can silently drop wwwroot from the
+# published output (see csproj history). Fail loudly here rather than ship an
+# EXE that 404s every static file.
+$publishedIndex = Join-Path $publishDir 'wwwroot/index.html'
+if (-not (Test-Path $publishedIndex)) {
+    throw "Publish output missing wwwroot/index.html at '$publishedIndex'. The Angular bundle did not make it into the artifact."
+}
+
 if (-not $KeepSymbols) {
     Get-ChildItem $publishDir -Include *.pdb, *.xml -File -Recurse | Remove-Item -Force
 }
