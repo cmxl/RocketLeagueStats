@@ -51,6 +51,11 @@ public static class ServiceCollectionExtensions
         // EventStoreStartupService runs migrations + logs path/size before any other hosted service
         // touches the DB; subsequent services depend on the schema being present.
         services.AddHostedService<EventStoreStartupService>();
+        // HistoricalDataBackfillService backfills team metadata + PlayerMatchStats on rows
+        // persisted before commit 8080c69 shipped the projection logic. Runs once at startup
+        // (idempotent) so historical recaps render correctly. Must run AFTER migrations and
+        // BEFORE the live writer to avoid double-writing rows on the first batch of a fresh match.
+        services.AddHostedService<HistoricalDataBackfillService>();
         services.AddHostedService<IniBootstrapHostedService>();
         services.AddHostedService<StatsApiListenerService>();
         services.AddHostedService<JsonlEventLoggerService>();
