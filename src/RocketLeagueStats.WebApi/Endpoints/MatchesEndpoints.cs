@@ -42,6 +42,13 @@ internal static class MatchesEndpoints
             })
             .WithName("GetMatchRecap");
 
+        app.MapDelete("/api/matches/{id}", async (string id, IMediator mediator, CancellationToken ct) =>
+            {
+                var deleted = await mediator.Send(new DeleteMatchCommand(id), ct);
+                return deleted ? Results.NoContent() : Results.NotFound();
+            })
+            .WithName("DeleteMatch");
+
         return app;
     }
 }

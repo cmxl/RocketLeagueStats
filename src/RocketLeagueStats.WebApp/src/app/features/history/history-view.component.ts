@@ -21,7 +21,7 @@ import { SummaryStripComponent } from './summary-strip.component';
     } @else {
       <section class="history-grid">
         @for (match of (matches.value() ?? []); track match.matchId) {
-          <rls-match-card [match]="match" />
+          <rls-match-card [match]="match" (deleted)="matches.reload()" />
         } @empty {
           <p class="history-empty">No matches yet.</p>
         }

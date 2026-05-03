@@ -35,6 +35,13 @@ export class ApiClient {
     return firstValueFrom(this.http.get<MatchRecap>(`/api/matches/${encodeURIComponent(id)}`));
   }
 
+  deleteMatch(id: string): Promise<void> {
+    // Server returns 204 No Content on success and 404 when the MatchGuid isn't found. The
+    // cascade across Events / MatchSnapshots / EventParticipants / PlayerMatchStats happens
+    // server-side via SQLite FK cascades.
+    return firstValueFrom(this.http.delete<void>(`/api/matches/${encodeURIComponent(id)}`));
+  }
+
   getSettings(): Promise<Settings> {
     return firstValueFrom(this.http.get<Settings>('/api/settings'));
   }
