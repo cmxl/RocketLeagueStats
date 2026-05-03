@@ -21,6 +21,9 @@ public enum StatfeedType
     AerialGoal,
     BackwardsGoal,
     OvertimeGoal,
+    BicycleGoal,
+    LongGoal,
+    PoolShot,
     Mvp,
     Win,
 }

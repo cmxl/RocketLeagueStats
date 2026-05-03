@@ -19,9 +19,12 @@ export class StatfeedIconPipe implements PipeTransform {
       case 'ultraDamage': return '⚡';
       case 'savior': return '🛡️';
       case 'bicycleHit': return '🚴';
+      case 'bicycleGoal': return '🤸';
       case 'aerialGoal': return '✈️';
       case 'backwardsGoal': return '🔄';
       case 'overtimeGoal': return '⏱️';
+      case 'longGoal': return '🏌️';
+      case 'poolShot': return '🎱';
       case 'hattrick': return '🎩';
       case 'mvpHattrick': return '👑';
       case 'mvp': return '🏅';

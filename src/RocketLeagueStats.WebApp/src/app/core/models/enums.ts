@@ -9,6 +9,8 @@ export type MatchType =
 export type StatfeedType =
   | 'other' | 'save' | 'epicSave' | 'demolish' | 'hattrick' | 'mvpHattrick'
   | 'savior' | 'bicycleHit' | 'damage' | 'ultraDamage'
-  | 'aerialGoal' | 'backwardsGoal' | 'overtimeGoal' | 'mvp' | 'win';
+  | 'aerialGoal' | 'backwardsGoal' | 'overtimeGoal'
+  | 'bicycleGoal' | 'longGoal' | 'poolShot'
+  | 'mvp' | 'win';
 
 export type HistorySort = 'mostRecent' | 'highestScoring';

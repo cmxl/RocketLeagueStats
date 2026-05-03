@@ -59,6 +59,9 @@ internal static class PlayerTallyAggregator
                     case StatfeedType.AerialGoal:
                     case StatfeedType.BackwardsGoal:
                     case StatfeedType.OvertimeGoal:
+                    case StatfeedType.BicycleGoal:
+                    case StatfeedType.LongGoal:
+                    case StatfeedType.PoolShot:
                     case StatfeedType.Mvp:
                     case StatfeedType.Win:
                     default:

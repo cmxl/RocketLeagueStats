@@ -30,6 +30,9 @@ public sealed class EventMapperTests
     [InlineData("AerialGoal", "Aerial Goal", StatfeedType.AerialGoal)]
     [InlineData("BackwardsGoal", "Backwards Goal", StatfeedType.BackwardsGoal)]
     [InlineData("OvertimeGoal", "Overtime Goal", StatfeedType.OvertimeGoal)]
+    [InlineData("BicycleGoal", "Bicycle Goal", StatfeedType.BicycleGoal)]
+    [InlineData("LongGoal", "Long Goal", StatfeedType.LongGoal)]
+    [InlineData("PoolShot", "Pool Shot", StatfeedType.PoolShot)]
     [InlineData("MVP", "MVP", StatfeedType.Mvp)]
     [InlineData("Win", "Win", StatfeedType.Win)]
     public void Classifies_known_event_names(string eventName, string displayType, StatfeedType expected)
