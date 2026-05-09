@@ -1,0 +1,18 @@
+/* TS config for the service worker. Kept separate from tsconfig.app.json so
+ * the Angular build can compile against the DOM lib while the SW compiles
+ * against the WebWorker lib. esbuild doesn't type-check during bundling -
+ * this config exists for IDE diagnostics and explicit `tsc --noEmit` runs.
+ */
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/sw",
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "noEmit": true
+  },
+  "include": [
+    "src/sw.ts",
+    "src/sw-protocol.ts"
+  ]
+}
