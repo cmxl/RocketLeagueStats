@@ -4,12 +4,19 @@ import { LiveMatchStore } from './core/state/live-match.store';
 import { NavBarComponent } from './shared/components/nav-bar.component';
 import { ConnectionBannerComponent } from './shared/components/connection-banner.component';
 import { MatchEndToastComponent } from './shared/components/match-end-toast.component';
+import { AppUpdateBannerComponent } from './shared/components/app-update-banner.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, NavBarComponent, ConnectionBannerComponent, MatchEndToastComponent],
+  imports: [
+    RouterOutlet,
+    NavBarComponent,
+    ConnectionBannerComponent,
+    MatchEndToastComponent,
+    AppUpdateBannerComponent,
+  ],
   templateUrl: './app.html',
   styleUrl: './app.css',
 })

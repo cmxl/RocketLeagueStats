@@ -23,6 +23,29 @@ const EXPIRATION = {
   fonts:  { maxEntries: 30,  maxAgeSeconds: 365 * 24 * 60 * 60 },
 } as const;
 
+// workbox-expiration writes an LRU timestamp to IndexedDB after every cache
+// put. Between the cache.put completing and the IDB transaction starting, the
+// browser can suspend the SW and tear down the open IDB connection - the
+// transaction then throws InvalidStateError ("database connection is closing")
+// as an unhandled rejection. The cache write itself has already succeeded, so
+// the only side-effect is one missing LRU access record (maxEntries eviction
+// is slightly less accurate; maxAgeSeconds is unaffected).
+//
+// There is no Workbox-level fix - the team acknowledges it and recommends
+// consumers swallow this specific rejection. Match narrowly so real bugs in
+// our SW code still surface in DevTools.
+//
+// Tracked upstream: https://github.com/GoogleChrome/workbox/issues/2952
+self.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason as { name?: string; message?: string } | undefined;
+  if (
+    reason?.name === 'InvalidStateError' &&
+    reason.message?.includes('database connection is closing')
+  ) {
+    event.preventDefault();
+  }
+});
+
 // App shell from the build manifest (filled in at build time by injectManifest).
 precacheAndRoute(self.__WB_MANIFEST);
 
